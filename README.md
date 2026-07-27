@@ -41,7 +41,12 @@ fichas de ruta, noticias) vive en la base de datos, no en el navegador.
      el backend).
 4. Añade también:
    - `ADMIN_PASSWORD` → la contraseña que usará el/la administrador/a del
-     torneo para entrar.
+     torneo para entrar. Además de esta (configurable sin tocar código),
+     `api/login.js` tiene una segunda contraseña fija escrita en el propio
+     código (`FIXED_ADMIN_PASSWORD`) que siempre funciona pase lo que pase
+     con la variable de entorno. ⚠️ Al quedar en el código, es visible para
+     cualquiera que vea el repositorio — solo úsala si el repo es privado y
+     confías en quién tiene acceso a él.
    - `JWT_SECRET` → una cadena larga y aleatoria (por ejemplo, generada con
      `openssl rand -hex 32`).
 
