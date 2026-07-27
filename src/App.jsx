@@ -547,8 +547,8 @@ function BracketSlot({ player, isWinner, hoveredName, onHover, onClick, clickabl
   );
 }
 
-function BracketMatchCard({ match, roundIndex, matchIndex, color, hoveredName, onHover, onSetWinner, cardRef }) {
-  const clickable = Boolean(match.p1 && match.p2);
+function BracketMatchCard({ match, roundIndex, matchIndex, color, hoveredName, onHover, onSetWinner, cardRef, editable }) {
+  const clickable = editable && Boolean(match.p1 && match.p2);
   return (
     <div ref={cardRef} className="flex flex-col gap-1 bg-gray-900/70 border rounded-xl p-1.5" style={{ borderColor: `${color}55`, width: 192 }}>
       <BracketSlot player={match.p1} isWinner={Boolean(match.winner && match.p1 && match.winner.name === match.p1.name)} hoveredName={hoveredName} onHover={onHover} clickable={clickable} onClick={() => onSetWinner(roundIndex, matchIndex, match.p1)} />
@@ -592,7 +592,8 @@ function BracketLines({ lines, hoveredName }) {
   );
 }
 
-function Bracket32View({ users }) {
+function Bracket32View({ users, role }) {
+  const isAdmin = role === 'Administrador';
   const players = useMemo(() => {
     const list = users.slice(0, 32).map((u) => ({ name: u.name, color: u.color }));
     while (list.length < 32) list.push(null);
@@ -614,7 +615,7 @@ function Bracket32View({ users }) {
   function setCardRef(key) { return (el) => { cardRefs[key] = el; }; }
 
   function handleSetWinner(roundIndex, matchIndex, player) {
-    if (!player) return;
+    if (!isAdmin || !player) return;
     setRounds((prev) => {
       const copy = prev.map((r) => r.map((m) => ({ ...m })));
       copy[roundIndex][matchIndex].winner = player;
@@ -674,7 +675,10 @@ function Bracket32View({ users }) {
         <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-2">
           <div>
             <h2 className="font-display text-xl font-bold text-white flex items-center gap-2 tracking-wide"><Trophy className="w-5 h-5 text-amber-400" /> PLAYOFFS · CUADRO DE 32</h2>
-            <p className="text-sm text-gray-500 mt-1">Eliminación directa a partido único · {registered} inscritos, {byeCount} BYES automáticos. Toca un jugador para avanzarlo de ronda.</p>
+            <p className="text-sm text-gray-500 mt-1">
+              Eliminación directa a partido único · {registered} inscritos, {byeCount} BYES automáticos.
+              {isAdmin ? ' Toca un jugador para avanzarlo de ronda.' : ' Solo el administrador puede cargar resultados aquí.'}
+            </p>
           </div>
           {champion && (
             <div className="flex items-center gap-2 bg-amber-500/10 border border-amber-500/30 rounded-lg px-3 py-2">
@@ -708,6 +712,7 @@ function Bracket32View({ users }) {
                     onHover={setHoveredName}
                     onSetWinner={handleSetWinner}
                     cardRef={setCardRef(`${ri}-${mi}`)}
+                    editable={isAdmin}
                   />
                 ))}
               </div>
@@ -2184,7 +2189,7 @@ export default function App() {
             {view === 'inicio' && <HomeView countdown={countdown} news={news} onNavigate={setView} users={users} />}
             {view === 'participantes' && <ParticipantsView users={users} />}
             {view === 'bracket' && <GroupStandingsView users={users} />}
-            {view === 'playoffs' && <Bracket32View users={users} />}
+            {view === 'playoffs' && <Bracket32View users={users} role={role} />}
             {view === 'torneo-suizo' && (
               <SwissBracketView
                 users={users}
