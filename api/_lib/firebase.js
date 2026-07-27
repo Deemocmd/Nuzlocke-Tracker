@@ -30,4 +30,6 @@ export const COLLECTIONS = {
   users: 'users',
   routeEntries: 'routeEntries',
   news: 'newsPosts',
+  wonderTrades: 'wonderTrades',
+  swissBracket: 'swissBracket',
 };

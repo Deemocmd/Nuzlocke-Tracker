@@ -105,7 +105,10 @@ api/_lib/auth.js         JWT de sesión + guards de admin/usuario
 api/login.js             POST — login de admin o de jugador
 api/users.js             GET/POST/DELETE — participantes y sus fichas
 api/route-entry.js       PUT — guarda una fila de ruta/Pokémon
-api/news.js               GET/POST — noticias del torneo
+api/custom-route.js      POST/DELETE — filas extra que cada participante se agrega solo
+api/wonder-trade.js      GET/POST/DELETE — intercambios prodigiosos
+api/bracket.js           GET/POST/PUT/DELETE — Torneo Oficial (bracket suizo)
+api/news.js              GET/POST — noticias del torneo
 src/api.js               Cliente fetch del frontend hacia /api
 src/usePokemonSprite.js  Busca el sprite de cualquier Pokémon por nombre en la PokeAPI
 ```
@@ -117,8 +120,74 @@ src/usePokemonSprite.js  Busca el sprite de cualquier Pokémon por nombre en la 
 - **`routeEntries`** (colección): un doc por fila de ruta, con `userId`
   apuntando al participante dueño y `orderIndex` para el orden — `route`,
   `pokemonName`, `nickname`, `level`, `nature`, `status`, `ability`, `item`,
-  `notes`.
+  `notes`, y opcionalmente `isCustom: true` si la agregó el propio
+  participante (en vez de venir de las 62 rutas fijas de Hoenn).
 - **`newsPosts`** (colección): `title`, `excerpt`, `createdAt`.
+- **`wonderTrades`** (colección): historial y cola de los Intercambios
+  prodigiosos — `userId`, `routeEntryId`, `pokemonName`, `status`
+  (`pending`/`completed`), `receivedPokemon`, `matchedWith`, `createdAt`,
+  `resolvedAt`.
+- **`swissBracket`** (colección, un único documento `main`): el Torneo
+  Oficial — `title`, `status` (`active`/`finished`), `participantIds`,
+  `rounds` (array de fechas, cada una con sus combates).
+
+## Funcionalidades nuevas
+
+### Intercambios prodigiosos (pestaña "Intercambios", solo para jugadores)
+
+Cada participante elige uno de sus Pokémon **vivos** y lo ofrece al fondo
+compartido. Si en ese momento hay otra oferta pendiente de **otro**
+participante, el sistema los empareja al instante y ambos reciben la
+especie del otro en la misma fila que ofrecieron (apodo, nivel, naturaleza,
+etc. de esa fila se reinician porque pasa a ser un individuo distinto). Si
+nadie está esperando, la oferta queda en cola hasta que alguien mande la
+suya — se puede cancelar en cualquier momento antes de que se empareje.
+
+### Filas propias en la ficha Nuzlocke ("Mi Perfil")
+
+Cada participante, viendo **su propia** ficha, tiene al final un cuadro
+para agregarse filas extra con el nombre que quiera (por ejemplo, un
+encuentro especial o un evento), además de sus 62 rutas fijas de Hoenn.
+Puede borrarlas cuando quiera; solo puede borrar las que él mismo agregó
+(no las rutas fijas). Nota: estas filas cuentan igual que cualquier otra
+para el conteo de vidas si se marcan como "Muerto" — si prefieres que las
+filas extra no descuenten vidas, avísame y lo ajusto.
+
+### Torneo Oficial — bracket suizo (pestaña "Torneo Oficial", visible para todos)
+
+Un bracket **nuevo y separado** del Bracket/Playoffs de eliminación directa
+que ya existía (esos dos siguen intactos). Funciona así:
+
+1. El administrador selecciona qué participantes entran y le pone un
+   título; la Fecha 1 se empareja al azar.
+2. En cada combate, el administrador toca el ícono de trofeo 🏆 junto al
+   ganador para cargar el resultado. **Los jugadores no pueden tocar
+   resultados** — solo ven el bracket, sin ningún control editable.
+3. El administrador puede mover a cualquier participante a cualquier otro
+   puesto del cuadro en cualquier momento con el ícono de flechas ⇄: lo
+   toca una vez sobre el jugador de origen y otra vez sobre el puesto
+   destino, y se intercambian.
+4. Cuando todos los combates de la fecha tienen ganador, el botón "Generar
+   siguiente fecha" arma la siguiente ronda emparejando a cada participante
+   contra otro con su mismo récord (igual que el sistema suizo de la
+   imagen de referencia).
+5. "Finalizar torneo" cierra el bracket y muestra la clasificación final
+   agrupada por récord. "Reiniciar" borra el torneo completo para empezar
+   de nuevo.
+
+La app no fuerza una cantidad fija de fechas ni de participantes (el
+ejemplo de 32 jugadores / 3 fechas era solo ilustrativo) — funciona con
+cualquier número de participantes y el administrador decide cuándo generar
+la siguiente fecha o finalizar.
+
+### Índices de Firestore que puede pedirte crear
+
+Como con `routeEntries`, la primera vez que uses cada funcionalidad nueva
+en producción, es posible que Firestore te muestre un error
+`FAILED_PRECONDITION: The query requires an index` con un link directo
+para crearlo (como ya te pasó antes). Es normal la primera vez: solo hay
+que abrir ese link y confirmar "Crear índice", esperar 1-5 minutos a que
+diga "Enabled", y volver a intentar.
 
 ## Notas y límites conocidos
 
@@ -130,7 +199,9 @@ src/usePokemonSprite.js  Busca el sprite de cualquier Pokémon por nombre en la 
   local a la sesión del administrador que la usa, ya que ahora es una
   herramienta solo-admin y no se pidió que se compartiera entre
   dispositivos.
-- El **Bracket** y los **Playoffs** siguen calculándose en el navegador a
-  partir de la lista de participantes (no hay resultados de combates
-  persistidos en la base de datos); si más adelante quieres registrar
-  resultados de combates reales, se puede añadir una colección `matches`.
+- El **Bracket** y los **Playoffs** (eliminación directa de 32) siguen
+  calculándose en el navegador a partir de la lista de participantes (no
+  hay resultados de combates persistidos en la base de datos); si más
+  adelante quieres registrar resultados de combates reales ahí también, se
+  puede añadir una colección `matches`, igual que ya se hizo para el
+  Torneo Oficial.

@@ -3,6 +3,7 @@ import {
   Home, Users, Swords, Trophy, Dices, ScrollText,
   BarChart3, ShieldCheck, UserCircle, Menu, X, Search,
   Skull, Clock, Flame, Newspaper, ChevronDown, Plus,
+  ArrowLeftRight, Shuffle, Move, Trash2,
 } from 'lucide-react';
 import { api, saveSession, loadSession, clearSession } from './api.js';
 import { usePokemonSprite } from './usePokemonSprite.js';
@@ -82,6 +83,8 @@ const NAV_ITEMS = [
   { key: 'participantes', label: 'Participantes', icon: Users },
   { key: 'bracket', label: 'Bracket', icon: Swords },
   { key: 'playoffs', label: 'Playoffs', icon: Trophy },
+  { key: 'torneo-suizo', label: 'Torneo Oficial', icon: Shuffle },
+  { key: 'intercambios', label: 'Intercambios', icon: ArrowLeftRight },
   { key: 'ruleta', label: 'Ruleta', icon: Dices },
   { key: 'normas', label: 'Normas', icon: ScrollText },
   { key: 'estadisticas', label: 'Estadísticas', icon: BarChart3 },
@@ -91,6 +94,7 @@ const NAV_ITEMS = [
 
 const VIEW_TITLES = {
   inicio: 'Inicio', participantes: 'Participantes', bracket: 'Bracket', playoffs: 'Playoffs',
+  'torneo-suizo': 'Torneo Oficial', intercambios: 'Intercambios prodigiosos',
   ruleta: 'Ruleta', normas: 'Normas', estadisticas: 'Estadísticas',
   admin: 'Administrador', perfil: 'Mi Perfil',
 };
@@ -724,6 +728,348 @@ function Bracket32View({ users }) {
   );
 }
 
+/* ============================== TORNEO OFICIAL (BRACKET SUIZO) ============================== */
+
+function computeSwissRecords(bracket) {
+  const records = {};
+  (bracket.participantIds || []).forEach((id) => { records[id] = { wins: 0, losses: 0 }; });
+  (bracket.rounds || []).forEach((round) => {
+    round.matches.forEach((m) => {
+      if (!m.winner) return;
+      const loser = m.winner === m.playerA ? m.playerB : m.playerA;
+      if (records[m.winner]) records[m.winner].wins += 1;
+      if (loser && records[loser]) records[loser].losses += 1;
+    });
+  });
+  return records;
+}
+
+function SwissParticipantChip({ userId, userMap, isWinner, isMoveSource, dimmed }) {
+  const u = userId ? userMap[userId] : null;
+  if (!userId) {
+    return <div className="flex items-center px-2 py-1.5 rounded-lg border border-dashed border-gray-800 text-xs text-gray-600 h-[32px]">BYE</div>;
+  }
+  if (!u) {
+    return <div className="flex items-center px-2 py-1.5 rounded-lg border border-dashed border-gray-800 text-xs text-gray-700 italic h-[32px]">Desconocido</div>;
+  }
+  return (
+    <div className={`flex items-center gap-1.5 px-2 py-1.5 rounded-lg border text-xs font-mono-data h-[32px] transition-all ${
+      isWinner ? 'border-amber-400 bg-amber-500/10 text-amber-300 font-semibold' : 'border-gray-700 bg-gray-800/60 text-gray-300'
+    } ${isMoveSource ? 'ring-2 ring-sky-400' : ''} ${dimmed ? 'opacity-40' : ''}`}
+    >
+      <Avatar name={u.name} color={u.color} size="w-5 h-5" />
+      <span className="truncate flex-1">{u.name}</span>
+      {isWinner && <Trophy className="w-3 h-3 text-amber-400 shrink-0" />}
+    </div>
+  );
+}
+
+function SwissMatchCard({ match, userMap, editable, onSetWinner, moveSource, onMoveClick }) {
+  const clickableResult = editable && match.playerA && match.playerB;
+  return (
+    <div className="flex flex-col gap-1 bg-gray-900/70 border border-gray-800 rounded-xl p-1.5" style={{ width: 190 }}>
+      {['playerA', 'playerB'].map((slot) => {
+        const playerId = match[slot];
+        const isSrc = moveSource && moveSource.matchId === match.id && moveSource.slot === slot;
+        return (
+          <div key={slot} className="flex items-center gap-1">
+            <div className="flex-1">
+              <SwissParticipantChip userId={playerId} userMap={userMap} isWinner={Boolean(match.winner && match.winner === playerId)} isMoveSource={isSrc} />
+            </div>
+            {editable && (
+              <div className="flex flex-col gap-0.5 shrink-0">
+                <button
+                  type="button"
+                  title="Marcar como ganador"
+                  disabled={!clickableResult}
+                  onClick={() => onSetWinner(match.id, match.winner === playerId ? null : playerId)}
+                  className={`p-1 rounded border ${clickableResult ? 'border-gray-700 text-gray-400 hover:text-amber-400 hover:border-amber-500' : 'border-gray-900 text-gray-800 cursor-not-allowed'}`}
+                >
+                  <Trophy className="w-3 h-3" />
+                </button>
+                <button
+                  type="button"
+                  title="Mover a otro combate"
+                  onClick={() => onMoveClick(match.id, slot, playerId)}
+                  className={`p-1 rounded border ${isSrc ? 'border-sky-400 text-sky-300' : 'border-gray-700 text-gray-400 hover:text-sky-400 hover:border-sky-500'}`}
+                >
+                  <Move className="w-3 h-3" />
+                </button>
+              </div>
+            )}
+          </div>
+        );
+      })}
+    </div>
+  );
+}
+
+function SwissBracketView({ users, role, bracket, loading, onCreate, onSetWinner, onSwap, onAdvanceRound, onFinish, onReset }) {
+  const isAdmin = role === 'Administrador';
+  const userMap = useMemo(() => Object.fromEntries(users.map((u) => [u.id, u])), [users]);
+
+  const [selected, setSelected] = useState([]);
+  const [title, setTitle] = useState('Torneo Oficial');
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState('');
+  const [moveSource, setMoveSource] = useState(null);
+
+  function toggleSelected(id) {
+    setSelected((prev) => (prev.includes(id) ? prev.filter((x) => x !== id) : [...prev, id]));
+  }
+
+  async function handleCreate() {
+    if (selected.length < 2) { setError('Selecciona al menos 2 participantes.'); return; }
+    setBusy(true);
+    setError('');
+    try {
+      await onCreate(title, selected);
+      setSelected([]);
+    } catch (err) {
+      setError(err.message || 'No se pudo crear el torneo.');
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function handleSetWinner(matchId, winnerId) {
+    setError('');
+    try {
+      await onSetWinner(matchId, winnerId);
+    } catch (err) {
+      setError(err.message || 'No se pudo guardar el resultado.');
+    }
+  }
+
+  function handleMoveClick(matchId, slot, playerId) {
+    if (!moveSource) {
+      setMoveSource({ matchId, slot, playerId });
+      return;
+    }
+    if (moveSource.matchId === matchId && moveSource.slot === slot) {
+      setMoveSource(null);
+      return;
+    }
+    const src = moveSource;
+    setMoveSource(null);
+    onSwap(src.matchId, src.slot, matchId, slot).catch((err) => setError(err.message || 'No se pudo mover al jugador.'));
+  }
+
+  async function handleAdvance() {
+    setBusy(true);
+    setError('');
+    try {
+      await onAdvanceRound();
+    } catch (err) {
+      setError(err.message || 'No se pudo generar la siguiente fecha.');
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function handleFinish() {
+    setBusy(true);
+    setError('');
+    try {
+      await onFinish();
+    } catch (err) {
+      setError(err.message || 'No se pudo finalizar el torneo.');
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function handleReset() {
+    if (!window.confirm('Esto borra el torneo actual por completo. ¿Continuar?')) return;
+    setBusy(true);
+    setError('');
+    try {
+      await onReset();
+      setSelected([]);
+    } catch (err) {
+      setError(err.message || 'No se pudo reiniciar el torneo.');
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  if (loading) {
+    return <Panel><p className="text-sm text-gray-600">Cargando…</p></Panel>;
+  }
+
+  if (!bracket) {
+    if (!isAdmin) {
+      return (
+        <Panel className="flex flex-col items-center justify-center gap-2 py-14 text-gray-600 border-dashed">
+          <Shuffle className="w-8 h-8" />
+          <span className="text-sm">El administrador todavía no inició el Torneo Oficial.</span>
+        </Panel>
+      );
+    }
+    return (
+      <div className="space-y-4">
+        <Panel>
+          <h2 className="font-display text-xl font-bold text-white flex items-center gap-2 tracking-wide"><Shuffle className="w-5 h-5 text-amber-400" /> TORNEO OFICIAL · SISTEMA SUIZO</h2>
+          <p className="text-sm text-gray-500 mt-1">Elige quiénes participan. La Fecha 1 se empareja al azar; desde la Fecha 2, cada participante enfrenta rivales con su mismo récord — igual que en un torneo suizo real.</p>
+        </Panel>
+        <Panel>
+          <h3 className="text-white font-semibold mb-3">Configurar torneo</h3>
+          <input value={title} onChange={(e) => setTitle(e.target.value)} placeholder="Título del torneo" className={`${inputClass} w-full mb-3`} />
+          {users.length === 0 ? (
+            <p className="text-sm text-gray-600">Todavía no hay participantes creados.</p>
+          ) : (
+            <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-2 mb-3">
+              {users.map((u) => (
+                <button
+                  type="button"
+                  key={u.id}
+                  onClick={() => toggleSelected(u.id)}
+                  className={`flex items-center gap-2 px-3 py-1.5 rounded-lg border text-sm transition-colors ${selected.includes(u.id) ? 'bg-red-600/20 border-red-500 text-red-300' : 'bg-gray-800/60 border-gray-700 text-gray-400 hover:text-gray-200'}`}
+                >
+                  <Avatar name={u.name} color={u.color} />
+                  {u.name}
+                </button>
+              ))}
+            </div>
+          )}
+          {error && <p className="text-xs text-red-400 mb-2">{error}</p>}
+          <button
+            type="button"
+            onClick={handleCreate}
+            disabled={busy || selected.length < 2}
+            className="flex items-center justify-center gap-1.5 bg-red-600 hover:bg-red-500 disabled:opacity-50 disabled:cursor-not-allowed text-white text-sm font-semibold px-4 py-1.5 rounded-lg transition-colors"
+          >
+            <Shuffle className="w-4 h-4" /> Iniciar torneo ({selected.length} seleccionados)
+          </button>
+        </Panel>
+      </div>
+    );
+  }
+
+  const records = computeSwissRecords(bracket);
+  const currentRound = bracket.rounds[bracket.rounds.length - 1];
+  const currentRoundComplete = currentRound.matches.every((m) => m.isBye || m.winner);
+  const standings = [...bracket.participantIds].sort((a, b) => {
+    const ra = records[a] || { wins: 0, losses: 0 };
+    const rb = records[b] || { wins: 0, losses: 0 };
+    if (ra.wins !== rb.wins) return rb.wins - ra.wins;
+    return ra.losses - rb.losses;
+  });
+
+  const finalGroups = new Map();
+  if (bracket.status === 'finished') {
+    standings.forEach((id) => {
+      const r = records[id] || { wins: 0, losses: 0 };
+      const key = `${r.wins}-${r.losses}`;
+      if (!finalGroups.has(key)) finalGroups.set(key, []);
+      finalGroups.get(key).push(id);
+    });
+  }
+
+  return (
+    <div className="space-y-4">
+      <Panel>
+        <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-2">
+          <div>
+            <h2 className="font-display text-xl font-bold text-white flex items-center gap-2 tracking-wide"><Shuffle className="w-5 h-5 text-amber-400" /> {bracket.title.toUpperCase()}</h2>
+            <p className="text-sm text-gray-500 mt-1">
+              {bracket.participantIds.length} participantes · {bracket.rounds.length} fecha{bracket.rounds.length === 1 ? '' : 's'} jugada{bracket.rounds.length === 1 ? '' : 's'}
+              {bracket.status === 'finished' ? ' · Torneo finalizado' : ''}
+            </p>
+          </div>
+          {isAdmin && (
+            <div className="flex flex-wrap items-center gap-2">
+              {bracket.status === 'active' && (
+                <button type="button" onClick={handleAdvance} disabled={busy || !currentRoundComplete} className="flex items-center gap-1.5 bg-amber-600 hover:bg-amber-500 disabled:opacity-40 disabled:cursor-not-allowed text-white text-xs font-semibold px-3 py-1.5 rounded-lg transition-colors">
+                  Generar siguiente fecha
+                </button>
+              )}
+              {bracket.status === 'active' && (
+                <button type="button" onClick={handleFinish} disabled={busy || !currentRoundComplete} className="flex items-center gap-1.5 bg-emerald-700 hover:bg-emerald-600 disabled:opacity-40 disabled:cursor-not-allowed text-white text-xs font-semibold px-3 py-1.5 rounded-lg transition-colors">
+                  <Trophy className="w-3.5 h-3.5" /> Finalizar torneo
+                </button>
+              )}
+              <button type="button" onClick={handleReset} disabled={busy} className="text-xs text-red-400 hover:text-red-300 disabled:opacity-50 px-2">Reiniciar</button>
+            </div>
+          )}
+        </div>
+        {isAdmin && (
+          <p className="text-xs text-gray-600 mt-3">
+            Usa el trofeo <Trophy className="w-3 h-3 inline text-gray-500" /> para marcar al ganador de un combate, y la flecha <Move className="w-3 h-3 inline text-gray-500" /> para mover a un jugador a cualquier otro puesto: tócala una vez sobre el jugador de origen, y otra vez sobre el puesto destino.
+          </p>
+        )}
+        {error && <p className="text-xs text-red-400 mt-2">{error}</p>}
+      </Panel>
+
+      <Panel className="overflow-x-auto">
+        <div className="flex gap-6 min-w-full">
+          {bracket.rounds.map((round, ri) => (
+            <div key={ri} className="flex flex-col gap-2 shrink-0" style={{ width: 190 }}>
+              <div className="text-center mb-1">
+                <span className="text-xs font-bold uppercase tracking-wider font-mono-data text-amber-400">{round.label}</span>
+              </div>
+              {round.matches.map((m) => (
+                <SwissMatchCard
+                  key={m.id}
+                  match={m}
+                  userMap={userMap}
+                  editable={isAdmin && bracket.status === 'active'}
+                  onSetWinner={handleSetWinner}
+                  moveSource={moveSource}
+                  onMoveClick={handleMoveClick}
+                />
+              ))}
+            </div>
+          ))}
+        </div>
+      </Panel>
+
+      <Panel>
+        <h3 className="text-white font-semibold mb-3 flex items-center gap-2"><BarChart3 className="w-4 h-4 text-amber-400" /> Tabla de posiciones</h3>
+        <div className="space-y-1.5">
+          {standings.map((id) => {
+            const u = userMap[id];
+            const r = records[id] || { wins: 0, losses: 0 };
+            if (!u) return null;
+            return (
+              <div key={id} className="flex items-center gap-2.5 bg-gray-800/40 rounded-lg px-3 py-1.5">
+                <Avatar name={u.name} color={u.color} />
+                <span className="text-sm text-gray-200 flex-1 truncate">{u.name}</span>
+                <span className="font-mono-data text-sm text-gray-400">{r.wins}-{r.losses}</span>
+              </div>
+            );
+          })}
+        </div>
+      </Panel>
+
+      {bracket.status === 'finished' && (
+        <Panel className="border-amber-800/60 bg-amber-950/10">
+          <h3 className="text-amber-300 font-semibold mb-3 flex items-center gap-2"><Trophy className="w-4 h-4" /> Clasificación final</h3>
+          <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-3">
+            {[...finalGroups.entries()].map(([record, ids]) => (
+              <div key={record} className="bg-gray-900/60 border border-gray-800 rounded-xl p-3">
+                <div className="text-xs font-mono-data text-amber-400 mb-2">Récord {record}</div>
+                <div className="space-y-1">
+                  {ids.map((id) => {
+                    const u = userMap[id];
+                    if (!u) return null;
+                    return (
+                      <div key={id} className="flex items-center gap-2 text-sm text-gray-300">
+                        <Avatar name={u.name} color={u.color} size="w-5 h-5" />
+                        {u.name}
+                      </div>
+                    );
+                  })}
+                </div>
+              </div>
+            ))}
+          </div>
+        </Panel>
+      )}
+    </div>
+  );
+}
+
 /* ============================== RULETA ============================== */
 
 const ROULETTE_COLORS = { premio: '#f59e0b', castigo: '#dc2626', neutro: '#4b5563' };
@@ -1142,7 +1488,7 @@ function AdminStub({ news, onAddNews, users, onAddUser, onDeleteUser }) {
 
 /* ============================== MI PERFIL — REGISTRO NUZLOCKE ============================== */
 
-function RouteCard({ data, onChange }) {
+function RouteCard({ data, onChange, onDelete }) {
   const sprite = usePokemonSprite(data.pokemonName);
   return (
     <div className="flex flex-col md:flex-row md:items-center gap-2.5 bg-gray-900/60 border border-gray-800 rounded-xl p-3 hover:border-red-900/60 transition-colors">
@@ -1150,7 +1496,10 @@ function RouteCard({ data, onChange }) {
         <div className="w-11 h-11 rounded-lg bg-gray-800 border border-gray-700 flex items-center justify-center overflow-hidden shrink-0">
           {sprite ? <img src={sprite} alt={data.pokemonName} className="w-9 h-9 object-contain" /> : <span className="text-gray-600 text-xs">?</span>}
         </div>
-        <span className="text-sm font-semibold text-gray-200">{data.route}</span>
+        <span className="text-sm font-semibold text-gray-200 flex items-center gap-1.5">
+          {data.route}
+          {data.isCustom && <span className="text-[9px] uppercase tracking-wider text-amber-500 border border-amber-700/50 rounded px-1">Extra</span>}
+        </span>
       </div>
 
       <input
@@ -1177,18 +1526,27 @@ function RouteCard({ data, onChange }) {
       <input value={data.notes} onChange={(e) => onChange({ ...data, notes: e.target.value })} placeholder="Observaciones" className={`${inputClass} flex-1 min-w-0`} />
 
       <StatusBadge status={data.status} />
+      {data.isCustom && onDelete && (
+        <button type="button" onClick={onDelete} title="Eliminar esta fila" className="text-gray-600 hover:text-red-400 shrink-0">
+          <Trash2 className="w-4 h-4" />
+        </button>
+      )}
     </div>
   );
 }
 
-function TrackerView({ users, role, session, onRouteChange }) {
+function TrackerView({ users, role, session, onRouteChange, onAddCustomRoute, onDeleteCustomRoute }) {
   const isAdmin = role === 'Administrador';
   const [activeId, setActiveId] = useState(() => (isAdmin ? (users[0] && users[0].id) : session.userId));
   const [search, setSearch] = useState('');
   const [statusFilter, setStatusFilter] = useState('Todos');
   const [lastChanged, setLastChanged] = useState(null);
+  const [newRouteName, setNewRouteName] = useState('');
+  const [customBusy, setCustomBusy] = useState(false);
+  const [customError, setCustomError] = useState('');
 
   const activeUser = users.find((u) => u.id === activeId) || (isAdmin ? users[0] : users.find((u) => u.id === session.userId));
+  const isOwnProfile = !isAdmin && activeUser && activeUser.id === session.userId;
 
   useEffect(() => {
     if (!lastChanged) return undefined;
@@ -1215,6 +1573,29 @@ function TrackerView({ users, role, session, onRouteChange }) {
       else if (old.status === 'Muerto' && newData.status !== 'Muerto') setLastChanged('up');
     }
     onRouteChange(activeUser.id, routeId, newData);
+  }
+
+  async function handleAddCustomRoute() {
+    const name = newRouteName.trim();
+    if (!name) return;
+    setCustomBusy(true);
+    setCustomError('');
+    try {
+      await onAddCustomRoute(name);
+      setNewRouteName('');
+    } catch (err) {
+      setCustomError(err.message || 'No se pudo agregar la fila.');
+    } finally {
+      setCustomBusy(false);
+    }
+  }
+
+  async function handleDeleteCustomRoute(routeId) {
+    try {
+      await onDeleteCustomRoute(routeId);
+    } catch (err) {
+      setCustomError(err.message || 'No se pudo eliminar la fila.');
+    }
   }
 
   const filtered = routes.filter((r) => {
@@ -1288,9 +1669,191 @@ function TrackerView({ users, role, session, onRouteChange }) {
       </div>
 
       <div className="space-y-2">
-        {filtered.map((r) => <RouteCard key={r.id} data={r} onChange={(newData) => handleRouteChange(r.id, newData)} />)}
+        {filtered.map((r) => (
+          <RouteCard
+            key={r.id}
+            data={r}
+            onChange={(newData) => handleRouteChange(r.id, newData)}
+            onDelete={isOwnProfile && r.isCustom ? () => handleDeleteCustomRoute(r.id) : undefined}
+          />
+        ))}
         {filtered.length === 0 && <p className="text-sm text-gray-600 text-center py-6">Sin resultados para este filtro.</p>}
       </div>
+
+      {isOwnProfile && (
+        <Panel className="border-dashed border-gray-700">
+          <h4 className="text-sm font-semibold text-gray-300 mb-2 flex items-center gap-2"><Plus className="w-4 h-4 text-amber-400" /> Agregar una fila propia</h4>
+          <p className="text-xs text-gray-600 mb-3">Además de tus {HOENN_LOCATIONS.length} rutas fijas, puedes agregarte todas las filas extra que quieras (por ejemplo, un encuentro especial o un evento) y borrarlas cuando quieras.</p>
+          <div className="flex flex-col sm:flex-row gap-2">
+            <input
+              value={newRouteName}
+              onChange={(e) => setNewRouteName(e.target.value)}
+              onKeyDown={(e) => e.key === 'Enter' && handleAddCustomRoute()}
+              placeholder="Nombre de la fila (ej. Evento especial)…"
+              className={`${inputClass} flex-1`}
+            />
+            <button
+              type="button"
+              onClick={handleAddCustomRoute}
+              disabled={customBusy || !newRouteName.trim()}
+              className="flex items-center justify-center gap-1.5 bg-red-600 hover:bg-red-500 disabled:opacity-50 disabled:cursor-not-allowed text-white text-sm font-semibold px-4 py-1.5 rounded-lg transition-colors shrink-0"
+            >
+              <Plus className="w-4 h-4" /> Agregar
+            </button>
+          </div>
+          {customError && <p className="text-xs text-red-400 mt-2">{customError}</p>}
+        </Panel>
+      )}
+    </div>
+  );
+}
+
+/* ============================== INTERCAMBIOS PRODIGIOSOS ============================== */
+
+function WonderTradeView({ session, users, onTraded }) {
+  const me = users.find((u) => u.id === session.userId);
+  const [pending, setPending] = useState(null);
+  const [history, setHistory] = useState([]);
+  const [loading, setLoading] = useState(true);
+  const [selectedRouteId, setSelectedRouteId] = useState('');
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState('');
+  const [lastResult, setLastResult] = useState(null);
+
+  async function load() {
+    setLoading(true);
+    try {
+      const data = await api.getWonderTrade();
+      setPending(data.pending);
+      setHistory(data.history || []);
+    } catch (err) {
+      setError(err.message || 'No se pudieron cargar los intercambios.');
+    } finally {
+      setLoading(false);
+    }
+  }
+
+  useEffect(() => { load(); }, []);
+
+  const eligible = (me ? me.routes : []).filter((r) => r.status === 'Vivo' && r.pokemonName && r.pokemonName.trim());
+
+  async function handleOffer() {
+    if (!selectedRouteId) return;
+    setBusy(true);
+    setError('');
+    setLastResult(null);
+    try {
+      const res = await api.offerWonderTrade(selectedRouteId);
+      if (res.matched) {
+        setLastResult({ offered: res.offered, received: res.received });
+        setPending(null);
+        onTraded();
+      } else {
+        setPending(res.pending);
+      }
+      setSelectedRouteId('');
+      await load();
+    } catch (err) {
+      setError(err.message || 'No se pudo enviar la oferta.');
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function handleCancel() {
+    setBusy(true);
+    setError('');
+    try {
+      await api.cancelWonderTrade();
+      setPending(null);
+    } catch (err) {
+      setError(err.message || 'No se pudo cancelar la oferta.');
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  if (!me) {
+    return (
+      <Panel className="flex flex-col items-center justify-center gap-2 py-14 text-gray-600 border-dashed">
+        <ArrowLeftRight className="w-8 h-8" />
+        <span className="text-sm">Tu ficha todavía no se ha generado.</span>
+      </Panel>
+    );
+  }
+
+  return (
+    <div className="space-y-4">
+      <Panel>
+        <h2 className="font-display text-xl font-bold text-white flex items-center gap-2 tracking-wide">
+          <ArrowLeftRight className="w-5 h-5 text-amber-400" /> INTERCAMBIOS PRODIGIOSOS
+        </h2>
+        <p className="text-sm text-gray-500 mt-1">
+          Ofrece uno de tus Pokémon vivos al fondo compartido y recibe al instante un Pokémon al azar de otro
+          participante que también esté esperando. Si nadie está esperando, tu oferta queda en cola hasta que
+          alguien mande la suya.
+        </p>
+      </Panel>
+
+      {error && <p className="text-sm text-red-400">{error}</p>}
+
+      {lastResult && (
+        <Panel className="border-emerald-800/60 bg-emerald-950/20">
+          <p className="text-sm text-emerald-300 font-semibold">¡Intercambio realizado!</p>
+          <p className="text-sm text-gray-400 mt-1">Diste <span className="text-gray-200 font-medium">{lastResult.offered}</span> y recibiste <span className="text-emerald-300 font-medium">{lastResult.received}</span>.</p>
+        </Panel>
+      )}
+
+      {loading ? (
+        <Panel><p className="text-sm text-gray-600">Cargando…</p></Panel>
+      ) : pending ? (
+        <Panel className="border-amber-800/60 bg-amber-950/10">
+          <p className="text-sm text-amber-300 font-semibold flex items-center gap-2"><Clock className="w-4 h-4" /> Esperando pareja de intercambio…</p>
+          <p className="text-sm text-gray-400 mt-1">Ofreciste <span className="text-gray-200 font-medium">{pending.pokemonName}</span> (de tu fila "{pending.routeName}"). En cuanto otro participante ofrezca el suyo, se hace el cambio automáticamente.</p>
+          <button type="button" onClick={handleCancel} disabled={busy} className="mt-3 text-xs text-red-400 hover:text-red-300 disabled:opacity-50">Cancelar oferta</button>
+        </Panel>
+      ) : (
+        <Panel>
+          <h3 className="text-white font-semibold mb-3">Elige qué Pokémon ofrecer</h3>
+          {eligible.length === 0 ? (
+            <p className="text-sm text-gray-600">No tienes Pokémon vivos con especie asignada todavía. Completa tu ficha en "Mi Perfil" primero.</p>
+          ) : (
+            <div className="flex flex-col sm:flex-row gap-2">
+              <select value={selectedRouteId} onChange={(e) => setSelectedRouteId(e.target.value)} className={`${inputClass} flex-1`}>
+                <option value="">Selecciona un Pokémon…</option>
+                {eligible.map((r) => (
+                  <option key={r.id} value={r.id}>{r.pokemonName} — {r.nickname || r.route}</option>
+                ))}
+              </select>
+              <button
+                type="button"
+                onClick={handleOffer}
+                disabled={busy || !selectedRouteId}
+                className="flex items-center justify-center gap-1.5 bg-red-600 hover:bg-red-500 disabled:opacity-50 disabled:cursor-not-allowed text-white text-sm font-semibold px-4 py-1.5 rounded-lg transition-colors shrink-0"
+              >
+                <ArrowLeftRight className="w-4 h-4" /> Ofrecer
+              </button>
+            </div>
+          )}
+        </Panel>
+      )}
+
+      <Panel>
+        <h3 className="text-white font-semibold mb-3">Historial</h3>
+        {history.length === 0 ? (
+          <p className="text-sm text-gray-600">Todavía no hiciste ningún intercambio.</p>
+        ) : (
+          <div className="space-y-2">
+            {history.map((h) => (
+              <div key={h.id} className="flex items-center justify-between text-sm bg-gray-800/40 rounded-lg px-3 py-2">
+                <span className="text-gray-400">Diste <span className="text-gray-200">{h.pokemonName}</span></span>
+                <ArrowLeftRight className="w-3.5 h-3.5 text-gray-600 shrink-0" />
+                <span className="text-gray-400">Recibiste <span className="text-emerald-300">{h.receivedPokemon}</span></span>
+              </div>
+            ))}
+          </div>
+        )}
+      </Panel>
     </div>
   );
 }
@@ -1398,6 +1961,8 @@ export default function App() {
   const [rouletteSegments, setRouletteSegments] = useState(ROULETTE_SEGMENTS);
   const [rouletteAnimated, setRouletteAnimated] = useState(true);
   const [rouletteHistory, setRouletteHistory] = useState([]);
+  const [bracket, setBracket] = useState(null);
+  const [loadingBracket, setLoadingBracket] = useState(true);
   const targetDate = useMemo(() => new Date(Date.now() + 1000 * 60 * 60 * 24 * 14), []);
   const countdown = useCountdown(targetDate);
 
@@ -1406,6 +1971,7 @@ export default function App() {
     () => NAV_ITEMS.filter((item) => {
       if (item.key === 'admin') return role === 'Administrador';
       if (item.key === 'ruleta') return role === 'Administrador';
+      if (item.key === 'intercambios') return role === 'Usuario';
       return true;
     }),
     [role],
@@ -1432,6 +1998,17 @@ export default function App() {
     }
   }
 
+  async function refreshBracket() {
+    try {
+      const data = await api.getBracket();
+      setBracket(data);
+    } catch {
+      // Si falla, se muestra como "aún no hay torneo" — no es crítico.
+    } finally {
+      setLoadingBracket(false);
+    }
+  }
+
   // Al montar: recupera la sesión guardada en este dispositivo (si existe) y
   // carga usuarios/noticias desde la base de datos vía Firestore.
   useEffect(() => {
@@ -1440,11 +2017,13 @@ export default function App() {
     setSessionChecked(true);
     refreshUsers();
     refreshNews();
+    refreshBracket();
   }, []);
 
   useEffect(() => {
     if (view === 'admin' && role !== 'Administrador') setView('inicio');
     if (view === 'ruleta' && role !== 'Administrador') setView('inicio');
+    if (view === 'intercambios' && role !== 'Usuario') setView('inicio');
   }, [role, view]);
 
   async function handleAdminLogin(password) {
@@ -1501,6 +2080,46 @@ export default function App() {
   async function addNews(title) {
     await api.addNews(title);
     await refreshNews();
+  }
+
+  async function addCustomRoute(routeName) {
+    await api.addCustomRoute(routeName);
+    await refreshUsers();
+  }
+
+  async function deleteCustomRoute(id) {
+    await api.deleteCustomRoute(id);
+    await refreshUsers();
+  }
+
+  async function createBracket(title, participantIds) {
+    await api.createBracket(title, participantIds);
+    await refreshBracket();
+  }
+
+  async function bracketSetWinner(matchId, winnerId) {
+    await api.bracketSetWinner(matchId, winnerId);
+    await refreshBracket();
+  }
+
+  async function bracketSwap(matchIdA, slotA, matchIdB, slotB) {
+    await api.bracketSwap(matchIdA, slotA, matchIdB, slotB);
+    await refreshBracket();
+  }
+
+  async function bracketAdvanceRound() {
+    await api.bracketAdvanceRound();
+    await refreshBracket();
+  }
+
+  async function bracketFinish() {
+    await api.bracketFinish();
+    await refreshBracket();
+  }
+
+  async function resetBracket() {
+    await api.resetBracket();
+    await refreshBracket();
   }
 
   function addRouletteResult(entry) {
@@ -1566,6 +2185,23 @@ export default function App() {
             {view === 'participantes' && <ParticipantsView users={users} />}
             {view === 'bracket' && <GroupStandingsView users={users} />}
             {view === 'playoffs' && <Bracket32View users={users} />}
+            {view === 'torneo-suizo' && (
+              <SwissBracketView
+                users={users}
+                role={role}
+                bracket={bracket}
+                loading={loadingBracket}
+                onCreate={createBracket}
+                onSetWinner={bracketSetWinner}
+                onSwap={bracketSwap}
+                onAdvanceRound={bracketAdvanceRound}
+                onFinish={bracketFinish}
+                onReset={resetBracket}
+              />
+            )}
+            {view === 'intercambios' && role === 'Usuario' && (
+              <WonderTradeView session={session} users={users} onTraded={refreshUsers} />
+            )}
             {view === 'ruleta' && role === 'Administrador' && (
               <RouletteView
                 role={role}
@@ -1580,7 +2216,16 @@ export default function App() {
             {view === 'normas' && <RulesView role={role} content={rulesContent} onSave={setRulesContent} />}
             {view === 'estadisticas' && <StatsView users={users} />}
             {view === 'admin' && role === 'Administrador' && <AdminStub news={news} onAddNews={addNews} users={users} onAddUser={addUser} onDeleteUser={deleteUser} />}
-            {view === 'perfil' && <TrackerView users={users} role={role} session={session} onRouteChange={updateUserRoute} />}
+            {view === 'perfil' && (
+              <TrackerView
+                users={users}
+                role={role}
+                session={session}
+                onRouteChange={updateUserRoute}
+                onAddCustomRoute={addCustomRoute}
+                onDeleteCustomRoute={deleteCustomRoute}
+              />
+            )}
           </main>
         </div>
       </div>

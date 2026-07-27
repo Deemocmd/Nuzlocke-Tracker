@@ -34,6 +34,21 @@ export const api = {
   updateRoute: (id, data) => request(`/route-entry?id=${encodeURIComponent(id)}`, { method: 'PUT', body: data, auth: true }),
   getNews: () => request('/news'),
   addNews: (title) => request('/news', { method: 'POST', body: { title }, auth: true }),
+
+  addCustomRoute: (route) => request('/custom-route', { method: 'POST', body: { route }, auth: true }),
+  deleteCustomRoute: (id) => request(`/custom-route?id=${encodeURIComponent(id)}`, { method: 'DELETE', auth: true }),
+
+  getWonderTrade: () => request('/wonder-trade', { auth: true }),
+  offerWonderTrade: (routeEntryId) => request('/wonder-trade', { method: 'POST', body: { routeEntryId }, auth: true }),
+  cancelWonderTrade: () => request('/wonder-trade', { method: 'DELETE', auth: true }),
+
+  getBracket: () => request('/bracket'),
+  createBracket: (title, participantIds) => request('/bracket', { method: 'POST', body: { title, participantIds }, auth: true }),
+  bracketSetWinner: (matchId, winnerId) => request('/bracket', { method: 'PUT', body: { action: 'setWinner', matchId, winnerId }, auth: true }),
+  bracketSwap: (matchIdA, slotA, matchIdB, slotB) => request('/bracket', { method: 'PUT', body: { action: 'swap', matchIdA, slotA, matchIdB, slotB }, auth: true }),
+  bracketAdvanceRound: () => request('/bracket', { method: 'PUT', body: { action: 'advanceRound' }, auth: true }),
+  bracketFinish: () => request('/bracket', { method: 'PUT', body: { action: 'finish' }, auth: true }),
+  resetBracket: () => request('/bracket', { method: 'DELETE', auth: true }),
 };
 
 export function saveSession(session) {
