@@ -1,4 +1,4 @@
-import { db, COLLECTIONS } from './_lib/firebase.js';
+import { supabase } from './_lib/supabase.js';
 import { requireUserOrAdmin, allowCors } from './_lib/auth.js';
 
 export default async function handler(req, res) {
@@ -18,72 +18,39 @@ export default async function handler(req, res) {
       return;
     }
 
-    const routeRef = db.collection(COLLECTIONS.routeEntries).doc(String(id));
+    const { pokemonName, nickname, level, nature, status, ability, item, notes } = req.body || {};
 
-    const result = await db.runTransaction(async (tx) => {
-      // Firestore exige que todas las lecturas de una transacción ocurran
-      // antes que cualquier escritura, así que primero resolvemos ambas
-      // lecturas posibles (fila de ruta y, si aplica, el usuario dueño).
-      const routeDoc = await tx.get(routeRef);
-      if (!routeDoc.exists) {
-        throw new Error('NOT_FOUND');
-      }
-      const existing = routeDoc.data();
-
-      if (session.role !== 'admin' && session.userId !== existing.userId) {
-        throw new Error('FORBIDDEN');
-      }
-
-      const { pokemonName, nickname, level, nature, status, ability, item, notes } = req.body || {};
-
-      const newData = {
-        pokemonName: pokemonName ?? null,
-        nickname: nickname ?? '',
-        level: level === '' || level === undefined ? null : Number(level),
-        nature: nature ?? '',
-        status: status ?? existing.status,
-        ability: ability ?? '',
-        item: item ?? '',
-        notes: notes ?? '',
-      };
-
-      const oldStatus = existing.status;
-      const newStatus = newData.status;
-      const livesChange = oldStatus !== newStatus && (oldStatus === 'Muerto' || newStatus === 'Muerto');
-
-      let userRef = null;
-      let currentUser = null;
-      if (livesChange) {
-        userRef = db.collection(COLLECTIONS.users).doc(existing.userId);
-        const userDoc = await tx.get(userRef);
-        currentUser = userDoc.data();
-      }
-
-      // A partir de aquí, solo escrituras.
-      tx.update(routeRef, newData);
-
-      let user = null;
-      if (livesChange && userRef) {
-        let lives = currentUser.lives;
-        if (newStatus === 'Muerto' && oldStatus !== 'Muerto') lives = Math.max(0, lives - 1);
-        else if (oldStatus === 'Muerto' && newStatus !== 'Muerto') lives = Math.min(30, lives + 1);
-        tx.update(userRef, { lives });
-        user = { id: userRef.id, ...currentUser, lives };
-      }
-
-      return { updated: { id: routeRef.id, ...existing, ...newData }, user };
+    // update_route_entry hace, en una sola transacción de Postgres: verificar
+    // dueño/admin, guardar la fila y (si el estado entra o sale de "Muerto")
+    // ajustar las vidas del usuario — equivalente a la runTransaction previa.
+    const { data, error } = await supabase.rpc('update_route_entry', {
+      p_route_id: String(id),
+      p_is_admin: session.role === 'admin',
+      p_session_user_id: session.userId ?? null,
+      p_pokemon_name: pokemonName ?? null,
+      p_nickname: nickname ?? '',
+      p_level: level === '' || level === undefined ? null : Number(level),
+      p_nature: nature ?? '',
+      p_status: status ?? null,
+      p_ability: ability ?? '',
+      p_item: item ?? '',
+      p_notes: notes ?? '',
     });
 
-    res.status(200).json(result);
+    if (error) {
+      if (error.message?.includes('NOT_FOUND')) {
+        res.status(404).json({ error: 'Fila de ruta no encontrada.' });
+        return;
+      }
+      if (error.message?.includes('FORBIDDEN')) {
+        res.status(403).json({ error: 'No puedes editar la ficha de otro participante.' });
+        return;
+      }
+      throw error;
+    }
+
+    res.status(200).json(data);
   } catch (err) {
-    if (err.message === 'NOT_FOUND') {
-      res.status(404).json({ error: 'Fila de ruta no encontrada.' });
-      return;
-    }
-    if (err.message === 'FORBIDDEN') {
-      res.status(403).json({ error: 'No puedes editar la ficha de otro participante.' });
-      return;
-    }
     console.error(err);
     res.status(500).json({ error: 'No se pudo guardar la ficha.' });
   }

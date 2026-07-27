@@ -1,5 +1,6 @@
-import { db, COLLECTIONS } from './_lib/firebase.js';
+import { supabase, TABLES } from './_lib/supabase.js';
 import { requireUserOrAdmin, allowCors } from './_lib/auth.js';
+import { serializeRoute } from './_lib/serialize.js';
 
 // --------------------------------------------------------------------------
 // Filas personalizadas de la ficha Nuzlocke: cada participante puede
@@ -31,30 +32,35 @@ export default async function handler(req, res) {
         return;
       }
 
-      const existingSnap = await db
-        .collection(COLLECTIONS.routeEntries)
-        .where('userId', '==', session.userId)
-        .get();
-      const maxIndex = existingSnap.docs.reduce((max, d) => Math.max(max, d.data().orderIndex || 0), 0);
+      const { data: existing, error: existErr } = await supabase
+        .from(TABLES.routeEntries)
+        .select('order_index')
+        .eq('user_id', session.userId);
+      if (existErr) throw existErr;
+      const maxIndex = existing.reduce((max, r) => Math.max(max, r.order_index || 0), 0);
       const nextIndex = maxIndex + 1;
 
-      const ref = db.collection(COLLECTIONS.routeEntries).doc();
-      const data = {
-        userId: session.userId,
-        orderIndex: nextIndex,
-        route: trimmed,
-        pokemonName: null,
-        nickname: '',
-        level: null,
-        nature: '',
-        status: 'Vivo',
-        ability: '',
-        item: '',
-        notes: '',
-        isCustom: true,
-      };
-      await ref.set(data);
-      res.status(201).json({ id: ref.id, ...data });
+      const { data: inserted, error } = await supabase
+        .from(TABLES.routeEntries)
+        .insert({
+          user_id: session.userId,
+          order_index: nextIndex,
+          route: trimmed,
+          pokemon_name: null,
+          nickname: '',
+          level: null,
+          nature: '',
+          status: 'Vivo',
+          ability: '',
+          item: '',
+          notes: '',
+          is_custom: true,
+        })
+        .select()
+        .single();
+      if (error) throw error;
+
+      res.status(201).json(serializeRoute(inserted));
     } catch (err) {
       console.error(err);
       res.status(500).json({ error: 'No se pudo agregar la fila.' });
@@ -69,17 +75,25 @@ export default async function handler(req, res) {
         res.status(400).json({ error: 'Falta el id de la fila.' });
         return;
       }
-      const ref = db.collection(COLLECTIONS.routeEntries).doc(String(id));
-      const doc = await ref.get();
-      if (!doc.exists || doc.data().userId !== session.userId) {
+
+      const { data: row, error } = await supabase
+        .from(TABLES.routeEntries)
+        .select('*')
+        .eq('id', String(id))
+        .maybeSingle();
+      if (error) throw error;
+      if (!row || row.user_id !== session.userId) {
         res.status(404).json({ error: 'Esa fila no existe o no te pertenece.' });
         return;
       }
-      if (!doc.data().isCustom) {
+      if (!row.is_custom) {
         res.status(403).json({ error: 'Solo puedes eliminar filas que hayas agregado tú mismo.' });
         return;
       }
-      await ref.delete();
+
+      const { error: delErr } = await supabase.from(TABLES.routeEntries).delete().eq('id', String(id));
+      if (delErr) throw delErr;
+
       res.status(200).json({ ok: true });
     } catch (err) {
       console.error(err);

@@ -1,26 +1,19 @@
-import { db, COLLECTIONS } from './_lib/firebase.js';
+import { supabase, TABLES } from './_lib/supabase.js';
 import { requireAdmin, allowCors } from './_lib/auth.js';
-import { FieldValue } from 'firebase-admin/firestore';
-
-// Firestore guarda las fechas como objetos Timestamp, no como texto. El
-// frontend espera poder hacer `new Date(post.createdAt)`, así que las
-// convertimos a ISO string antes de responder.
-function serializeNews(id, data) {
-  return {
-    id,
-    ...data,
-    createdAt: data.createdAt && data.createdAt.toDate ? data.createdAt.toDate().toISOString() : data.createdAt,
-  };
-}
+import { serializeNews } from './_lib/serialize.js';
 
 export default async function handler(req, res) {
   if (allowCors(req, res)) return;
 
   if (req.method === 'GET') {
     try {
-      const snap = await db.collection(COLLECTIONS.news).orderBy('createdAt', 'desc').limit(20).get();
-      const news = snap.docs.map((d) => serializeNews(d.id, d.data()));
-      res.status(200).json(news);
+      const { data, error } = await supabase
+        .from(TABLES.news)
+        .select('*')
+        .order('created_at', { ascending: false })
+        .limit(20);
+      if (error) throw error;
+      res.status(200).json(data.map(serializeNews));
     } catch (err) {
       console.error(err);
       res.status(500).json({ error: 'No se pudieron cargar las noticias.' });
@@ -38,14 +31,13 @@ export default async function handler(req, res) {
         res.status(400).json({ error: 'Escribe un título.' });
         return;
       }
-      const ref = db.collection(COLLECTIONS.news).doc();
-      await ref.set({
-        title: trimmed,
-        excerpt: 'Publicada desde el panel de administrador.',
-        createdAt: FieldValue.serverTimestamp(),
-      });
-      const created = await ref.get();
-      res.status(201).json(serializeNews(ref.id, created.data()));
+      const { data, error } = await supabase
+        .from(TABLES.news)
+        .insert({ title: trimmed, excerpt: 'Publicada desde el panel de administrador.' })
+        .select()
+        .single();
+      if (error) throw error;
+      res.status(201).json(serializeNews(data));
     } catch (err) {
       console.error(err);
       res.status(500).json({ error: 'No se pudo publicar la noticia.' });

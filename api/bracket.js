@@ -1,19 +1,31 @@
-import { db, COLLECTIONS } from './_lib/firebase.js';
+import { supabase, TABLES } from './_lib/supabase.js';
 import { requireAdmin, allowCors } from './_lib/auth.js';
 import { randomUUID } from 'crypto';
 
 // --------------------------------------------------------------------------
 // Bracket suizo ("Torneo Oficial"): nuevo y separado del Bracket/Playoffs de
-// eliminación directa que ya existía. Se guarda como un único documento
-// ("main") en Firestore. Solo el administrador puede crearlo, tocar
+// eliminación directa que ya existía. Se guarda como una única fila
+// (id: "main") en la tabla swiss_bracket, con todo su contenido en la
+// columna jsonb "data". Solo el administrador puede crearlo, tocar
 // resultados o mover participantes entre combates; el resto de la gente
 // solo lo puede ver.
 // --------------------------------------------------------------------------
 
 const DOC_ID = 'main';
 
-function docRef() {
-  return db.collection(COLLECTIONS.swissBracket).doc(DOC_ID);
+async function loadBracket() {
+  const { data, error } = await supabase
+    .from(TABLES.swissBracket)
+    .select('data')
+    .eq('id', DOC_ID)
+    .maybeSingle();
+  if (error) throw error;
+  return data ? data.data : null;
+}
+
+async function saveBracket(bracket) {
+  const { error } = await supabase.from(TABLES.swissBracket).upsert({ id: DOC_ID, data: bracket });
+  if (error) throw error;
 }
 
 function shuffle(arr) {
@@ -70,8 +82,8 @@ export default async function handler(req, res) {
 
   if (req.method === 'GET') {
     try {
-      const doc = await docRef().get();
-      res.status(200).json(doc.exists ? { id: doc.id, ...doc.data() } : null);
+      const bracket = await loadBracket();
+      res.status(200).json(bracket ? { id: DOC_ID, ...bracket } : null);
     } catch (err) {
       console.error(err);
       res.status(500).json({ error: 'No se pudo cargar el torneo.' });
@@ -100,7 +112,7 @@ export default async function handler(req, res) {
         participantIds: ids,
         rounds: [round1],
       };
-      await docRef().set(bracket);
+      await saveBracket(bracket);
       res.status(201).json({ id: DOC_ID, ...bracket });
     } catch (err) {
       console.error(err);
@@ -111,12 +123,11 @@ export default async function handler(req, res) {
 
   if (req.method === 'PUT') {
     try {
-      const doc = await docRef().get();
-      if (!doc.exists) {
+      const bracket = await loadBracket();
+      if (!bracket) {
         res.status(404).json({ error: 'Todavía no hay un torneo creado.' });
         return;
       }
-      const bracket = doc.data();
       const { action } = req.body || {};
 
       if (action === 'setWinner') {
@@ -129,7 +140,7 @@ export default async function handler(req, res) {
           return;
         }
         match.winner = winnerId;
-        await docRef().set(bracket);
+        await saveBracket(bracket);
         res.status(200).json({ id: DOC_ID, ...bracket });
         return;
       }
@@ -153,7 +164,7 @@ export default async function handler(req, res) {
           m.isBye = !m.playerA || !m.playerB;
           if (m.isBye) m.winner = m.playerA || m.playerB || null;
         });
-        await docRef().set(bracket);
+        await saveBracket(bracket);
         res.status(200).json({ id: DOC_ID, ...bracket });
         return;
       }
@@ -201,14 +212,14 @@ export default async function handler(req, res) {
         }
 
         bracket.rounds.push({ label: `Fecha ${bracket.rounds.length + 1}`, matches });
-        await docRef().set(bracket);
+        await saveBracket(bracket);
         res.status(200).json({ id: DOC_ID, ...bracket });
         return;
       }
 
       if (action === 'finish') {
         bracket.status = 'finished';
-        await docRef().set(bracket);
+        await saveBracket(bracket);
         res.status(200).json({ id: DOC_ID, ...bracket });
         return;
       }
@@ -223,7 +234,8 @@ export default async function handler(req, res) {
 
   if (req.method === 'DELETE') {
     try {
-      await docRef().delete();
+      const { error } = await supabase.from(TABLES.swissBracket).delete().eq('id', DOC_ID);
+      if (error) throw error;
       res.status(200).json({ ok: true });
     } catch (err) {
       console.error(err);

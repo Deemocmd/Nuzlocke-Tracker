@@ -1,5 +1,5 @@
 import bcrypt from 'bcryptjs';
-import { db, COLLECTIONS } from './_lib/firebase.js';
+import { supabase, TABLES } from './_lib/supabase.js';
 import { signSession, allowCors } from './_lib/auth.js';
 
 export default async function handler(req, res) {
@@ -28,19 +28,23 @@ export default async function handler(req, res) {
         res.status(400).json({ error: 'Faltan datos de inicio de sesión.' });
         return;
       }
-      const doc = await db.collection(COLLECTIONS.users).doc(String(userId)).get();
-      if (!doc.exists) {
+      const { data: user, error } = await supabase
+        .from(TABLES.users)
+        .select('*')
+        .eq('id', String(userId))
+        .maybeSingle();
+      if (error) throw error;
+      if (!user) {
         res.status(401).json({ error: 'Usuario no encontrado.' });
         return;
       }
-      const user = doc.data();
       const valid = await bcrypt.compare(password, user.password);
       if (!valid) {
         res.status(401).json({ error: 'Contraseña incorrecta.' });
         return;
       }
-      const token = signSession({ role: 'user', userId: doc.id });
-      res.status(200).json({ token, role: 'user', userId: doc.id, name: user.name });
+      const token = signSession({ role: 'user', userId: user.id });
+      res.status(200).json({ token, role: 'user', userId: user.id, name: user.name });
       return;
     }
 

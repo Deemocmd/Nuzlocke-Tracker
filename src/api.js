@@ -1,8 +1,7 @@
 // Cliente ligero para hablar con las funciones serverless de /api, que a su
-// vez usan Firebase Admin para leer/escribir en Firestore. Todo lo que antes
-// vivía solo en memoria (usuarios, rutas, noticias) ahora se guarda en la
-// base de datos, así que cualquier persona desde cualquier dispositivo ve lo
-// mismo.
+// vez usan Supabase (Postgres) para leer/escribir. Todo lo que antes vivía
+// solo en memoria (usuarios, rutas, noticias) ahora se guarda en la base de
+// datos, así que cualquier persona desde cualquier dispositivo ve lo mismo.
 
 const SESSION_KEY = 'nuzlocke_session';
 
