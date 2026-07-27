@@ -2,13 +2,24 @@ import { db, COLLECTIONS } from './_lib/firebase.js';
 import { requireAdmin, allowCors } from './_lib/auth.js';
 import { FieldValue } from 'firebase-admin/firestore';
 
+// Firestore guarda las fechas como objetos Timestamp, no como texto. El
+// frontend espera poder hacer `new Date(post.createdAt)`, así que las
+// convertimos a ISO string antes de responder.
+function serializeNews(id, data) {
+  return {
+    id,
+    ...data,
+    createdAt: data.createdAt && data.createdAt.toDate ? data.createdAt.toDate().toISOString() : data.createdAt,
+  };
+}
+
 export default async function handler(req, res) {
   if (allowCors(req, res)) return;
 
   if (req.method === 'GET') {
     try {
       const snap = await db.collection(COLLECTIONS.news).orderBy('createdAt', 'desc').limit(20).get();
-      const news = snap.docs.map((d) => ({ id: d.id, ...d.data() }));
+      const news = snap.docs.map((d) => serializeNews(d.id, d.data()));
       res.status(200).json(news);
     } catch (err) {
       console.error(err);
@@ -34,7 +45,7 @@ export default async function handler(req, res) {
         createdAt: FieldValue.serverTimestamp(),
       });
       const created = await ref.get();
-      res.status(201).json({ id: ref.id, ...created.data() });
+      res.status(201).json(serializeNews(ref.id, created.data()));
     } catch (err) {
       console.error(err);
       res.status(500).json({ error: 'No se pudo publicar la noticia.' });

@@ -4,6 +4,13 @@ import { requireAdmin, allowCors } from './_lib/auth.js';
 import { HOENN_LOCATIONS, USER_COLOR_POOL } from '../shared/constants.js';
 import { FieldValue } from 'firebase-admin/firestore';
 
+// Firestore guarda las fechas como objetos Timestamp, no como texto; los
+// convertimos a ISO string antes de responder para que el frontend pueda
+// usarlas directamente con `new Date(...)`.
+function toIso(value) {
+  return value && value.toDate ? value.toDate().toISOString() : value;
+}
+
 export default async function handler(req, res) {
   if (allowCors(req, res)) return;
 
@@ -20,8 +27,8 @@ export default async function handler(req, res) {
             .get();
           const routes = routesSnap.docs.map((r) => ({ id: r.id, ...r.data() }));
           // Nunca devolvemos la contraseña al cliente.
-          const { password, ...rest } = doc.data();
-          return { id: doc.id, ...rest, routes };
+          const { password, createdAt, ...rest } = doc.data();
+          return { id: doc.id, ...rest, createdAt: toIso(createdAt), routes };
         })
       );
 
@@ -95,8 +102,8 @@ export default async function handler(req, res) {
       await batch.commit();
 
       const created = await userRef.get();
-      const { password: _pw, ...safe } = created.data();
-      res.status(201).json({ id: userRef.id, ...safe, routes });
+      const { password: _pw, createdAt, ...safe } = created.data();
+      res.status(201).json({ id: userRef.id, ...safe, createdAt: toIso(createdAt), routes });
     } catch (err) {
       console.error(err);
       res.status(500).json({ error: 'No se pudo crear el participante.' });
