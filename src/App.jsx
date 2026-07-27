@@ -1094,10 +1094,7 @@ function AdminStub({ news, onAddNews, users, onAddUser, onDeleteUser }) {
               <div key={u.id} className="flex items-center gap-2.5 bg-gray-800/40 rounded-lg px-3 py-2">
                 <Avatar name={u.name} color={u.color} />
                 <span className="text-sm text-gray-200 flex-1 truncate">{u.name}</span>
-                <button type="button" onClick={() => setRevealedId(revealedId === u.id ? null : u.id)} className="text-xs font-mono-data text-gray-500 hover:text-gray-300">
-                  {revealedId === u.id ? u.password : '••••••'}
-                </button>
-                <button type="button" onClick={() => onDeleteUser(u.id)} className="text-xs text-red-400 hover:text-red-300 px-2">Eliminar</button>
+                <button type="button" onClick={() => handleDelete(u.id)} className="text-xs text-red-400 hover:text-red-300 px-2">Eliminar</button>
               </div>
             ))}
           </div>
