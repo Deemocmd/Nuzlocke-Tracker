@@ -1,6 +1,6 @@
-import { supabase, TABLES } from './_lib/supabase.js';
+import { supabase } from './_lib/supabase.js';
 import { requireAdmin, allowCors } from './_lib/auth.js';
-import { serializeNews } from './_lib/serialize.js';
+import { newsToJson } from './_lib/serialize.js';
 
 export default async function handler(req, res) {
   if (allowCors(req, res)) return;
@@ -8,12 +8,12 @@ export default async function handler(req, res) {
   if (req.method === 'GET') {
     try {
       const { data, error } = await supabase
-        .from(TABLES.news)
+        .from('news_posts')
         .select('*')
         .order('created_at', { ascending: false })
         .limit(20);
       if (error) throw error;
-      res.status(200).json(data.map(serializeNews));
+      res.status(200).json(data.map(newsToJson));
     } catch (err) {
       console.error(err);
       res.status(500).json({ error: 'No se pudieron cargar las noticias.' });
@@ -32,12 +32,12 @@ export default async function handler(req, res) {
         return;
       }
       const { data, error } = await supabase
-        .from(TABLES.news)
+        .from('news_posts')
         .insert({ title: trimmed, excerpt: 'Publicada desde el panel de administrador.' })
         .select()
         .single();
       if (error) throw error;
-      res.status(201).json(serializeNews(data));
+      res.status(201).json(newsToJson(data));
     } catch (err) {
       console.error(err);
       res.status(500).json({ error: 'No se pudo publicar la noticia.' });

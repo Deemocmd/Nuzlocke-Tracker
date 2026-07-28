@@ -1,32 +1,15 @@
-import { supabase, TABLES } from './_lib/supabase.js';
+import { supabase } from './_lib/supabase.js';
 import { requireAdmin, allowCors } from './_lib/auth.js';
 import { randomUUID } from 'crypto';
 
 // --------------------------------------------------------------------------
-// Bracket suizo ("Torneo Oficial"): nuevo y separado del Bracket/Playoffs de
-// eliminación directa que ya existía. Se guarda como una única fila
-// (id: "main") en la tabla swiss_bracket, con todo su contenido en la
-// columna jsonb "data". Solo el administrador puede crearlo, tocar
+// Bracket suizo ("Torneo Oficial"): se guarda como una única fila ("main")
+// en la tabla swiss_bracket. Solo el administrador puede crearlo, tocar
 // resultados o mover participantes entre combates; el resto de la gente
 // solo lo puede ver.
 // --------------------------------------------------------------------------
 
 const DOC_ID = 'main';
-
-async function loadBracket() {
-  const { data, error } = await supabase
-    .from(TABLES.swissBracket)
-    .select('data')
-    .eq('id', DOC_ID)
-    .maybeSingle();
-  if (error) throw error;
-  return data ? data.data : null;
-}
-
-async function saveBracket(bracket) {
-  const { error } = await supabase.from(TABLES.swissBracket).upsert({ id: DOC_ID, data: bracket });
-  if (error) throw error;
-}
 
 function shuffle(arr) {
   const a = [...arr];
@@ -75,6 +58,29 @@ function findMatch(bracket, matchId) {
     if (mi !== -1) return { roundIndex: ri, matchIndex: mi };
   }
   return null;
+}
+
+async function loadBracket() {
+  const { data, error } = await supabase.from('swiss_bracket').select('*').eq('id', DOC_ID).maybeSingle();
+  if (error) throw error;
+  if (!data) return null;
+  return {
+    title: data.title,
+    status: data.status,
+    participantIds: data.participant_ids,
+    rounds: data.rounds,
+  };
+}
+
+async function saveBracket(bracket) {
+  const { error } = await supabase.from('swiss_bracket').upsert({
+    id: DOC_ID,
+    title: bracket.title,
+    status: bracket.status,
+    participant_ids: bracket.participantIds,
+    rounds: bracket.rounds,
+  });
+  if (error) throw error;
 }
 
 export default async function handler(req, res) {
@@ -158,8 +164,6 @@ export default async function handler(req, res) {
         const tmp = mA[slotA];
         mA[slotA] = mB[slotB];
         mB[slotB] = tmp;
-        // Si el combate ya no puede tener BYE porque ahora tiene dos
-        // jugadores (o dejó de tener alguno), recalculamos esa marca.
         [mA, mB].forEach((m) => {
           m.isBye = !m.playerA || !m.playerB;
           if (m.isBye) m.winner = m.playerA || m.playerB || null;
@@ -183,7 +187,6 @@ export default async function handler(req, res) {
           if (!groups.has(key)) groups.set(key, []);
           groups.get(key).push(id);
         });
-        // Ordenamos los grupos de mejor a peor récord (más victorias primero).
         const orderedGroups = [...groups.entries()].sort((a, b) => {
           const [wa, la] = a[0].split('-').map(Number);
           const [wb, lb] = b[0].split('-').map(Number);
@@ -234,7 +237,7 @@ export default async function handler(req, res) {
 
   if (req.method === 'DELETE') {
     try {
-      const { error } = await supabase.from(TABLES.swissBracket).delete().eq('id', DOC_ID);
+      const { error } = await supabase.from('swiss_bracket').delete().eq('id', DOC_ID);
       if (error) throw error;
       res.status(200).json({ ok: true });
     } catch (err) {

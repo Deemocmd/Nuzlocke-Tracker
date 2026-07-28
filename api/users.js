@@ -1,34 +1,32 @@
 import bcrypt from 'bcryptjs';
-import { supabase, TABLES } from './_lib/supabase.js';
+import { supabase } from './_lib/supabase.js';
 import { requireAdmin, allowCors } from './_lib/auth.js';
 import { HOENN_LOCATIONS, USER_COLOR_POOL } from '../shared/constants.js';
-import { serializeRoute, serializeUser } from './_lib/serialize.js';
+import { userToJson, routeToJson } from './_lib/serialize.js';
 
 export default async function handler(req, res) {
   if (allowCors(req, res)) return;
 
   if (req.method === 'GET') {
     try {
-      const { data: users, error } = await supabase
-        .from(TABLES.users)
+      const { data: users, error: usersError } = await supabase
+        .from('users')
         .select('*')
         .order('created_at', { ascending: true });
-      if (error) throw error;
+      if (usersError) throw usersError;
 
-      const result = await Promise.all(
-        users.map(async (u) => {
-          const { data: routes, error: routesErr } = await supabase
-            .from(TABLES.routeEntries)
-            .select('*')
-            .eq('user_id', u.id)
-            .order('order_index', { ascending: true });
-          if (routesErr) throw routesErr;
-          // Nunca devolvemos la contraseña al cliente.
-          return serializeUser(u, routes.map(serializeRoute));
-        })
-      );
+      const { data: routes, error: routesError } = await supabase
+        .from('route_entries')
+        .select('*')
+        .order('order_index', { ascending: true });
+      if (routesError) throw routesError;
 
-      res.status(200).json(result);
+      const routesByUser = {};
+      for (const r of routes) {
+        (routesByUser[r.user_id] ||= []).push(routeToJson(r));
+      }
+
+      res.status(200).json(users.map((u) => userToJson(u, routesByUser[u.id] || [])));
     } catch (err) {
       console.error(err);
       res.status(500).json({ error: 'No se pudieron cargar los participantes.' });
@@ -48,37 +46,38 @@ export default async function handler(req, res) {
         return;
       }
 
-      const { data: existing, error: existErr } = await supabase
-        .from(TABLES.users)
-        .select('id')
-        .eq('name', trimmedName)
-        .limit(1);
-      if (existErr) throw existErr;
-      if (existing.length) {
-        res.status(409).json({ error: 'Ya existe un participante con ese nombre.' });
-        return;
-      }
-
-      const { count, error: countErr } = await supabase
-        .from(TABLES.users)
+      const { count, error: countError } = await supabase
+        .from('users')
         .select('*', { count: 'exact', head: true });
-      if (countErr) throw countErr;
+      if (countError) throw countError;
 
       const color = USER_COLOR_POOL[(count || 0) % USER_COLOR_POOL.length];
       const hashed = await bcrypt.hash(String(password), 10);
-      const routesPayload = HOENN_LOCATIONS.map((route, i) => ({ orderIndex: i + 1, route }));
 
-      // create_participant crea el usuario y sus 62 filas de ruta en una
-      // sola transacción de Postgres (equivalente al batch de Firestore).
-      const { data, error } = await supabase.rpc('create_participant', {
+      const { data: newUserId, error: rpcError } = await supabase.rpc('create_user_with_routes', {
         p_name: trimmedName,
         p_password: hashed,
         p_color: color,
-        p_routes: routesPayload,
+        p_routes: HOENN_LOCATIONS,
       });
-      if (error) throw error;
 
-      res.status(201).json(data);
+      if (rpcError) {
+        if (rpcError.message?.includes('DUPLICATE_NAME')) {
+          res.status(409).json({ error: 'Ya existe un participante con ese nombre.' });
+          return;
+        }
+        throw rpcError;
+      }
+
+      const { data: user, error: userError } = await supabase
+        .from('users').select('*').eq('id', newUserId).single();
+      if (userError) throw userError;
+
+      const { data: routes, error: routesError } = await supabase
+        .from('route_entries').select('*').eq('user_id', newUserId).order('order_index', { ascending: true });
+      if (routesError) throw routesError;
+
+      res.status(201).json(userToJson(user, routes.map(routeToJson)));
     } catch (err) {
       console.error(err);
       res.status(500).json({ error: 'No se pudo crear el participante.' });
@@ -95,12 +94,10 @@ export default async function handler(req, res) {
         res.status(400).json({ error: 'Falta el id del participante.' });
         return;
       }
-
-      // route_entries tiene ON DELETE CASCADE sobre user_id, así que borrar
-      // el usuario ya se lleva sus filas de ruta consigo.
-      const { error } = await supabase.from(TABLES.users).delete().eq('id', String(id));
+      // route_entries tiene ON DELETE CASCADE sobre user_id: basta con
+      // borrar el usuario para que sus filas de ruta se borren solas.
+      const { error } = await supabase.from('users').delete().eq('id', id);
       if (error) throw error;
-
       res.status(200).json({ ok: true });
     } catch (err) {
       console.error(err);

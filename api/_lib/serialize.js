@@ -1,60 +1,71 @@
-// Postgres/Supabase devuelve columnas en snake_case y ya serializa los
-// timestamptz como texto ISO 8601, así que a diferencia de la versión con
-// Firestore (que guardaba Timestamp y requería un toIso manual) aquí solo
-// hace falta remapear los nombres de campo.
+// Postgres/Supabase devuelve columnas en snake_case; el frontend (src/App.jsx)
+// espera el mismo shape camelCase que antes devolvía Firestore. Estos
+// helpers hacen esa conversión en un solo lugar.
 
-export function serializeRoute(r) {
+export function userToJson(row, routes = []) {
   return {
-    id: r.id,
-    userId: r.user_id,
-    orderIndex: r.order_index,
-    route: r.route,
-    pokemonName: r.pokemon_name,
-    nickname: r.nickname,
-    level: r.level,
-    nature: r.nature,
-    status: r.status,
-    ability: r.ability,
-    item: r.item,
-    notes: r.notes,
-    isCustom: r.is_custom,
-  };
-}
-
-export function serializeUser(u, routes = []) {
-  return {
-    id: u.id,
-    name: u.name,
-    color: u.color,
-    lives: u.lives,
-    wins: u.wins,
-    losses: u.losses,
-    status: u.status,
-    createdAt: u.created_at,
+    id: row.id,
+    name: row.name,
+    color: row.color,
+    lives: row.lives,
+    wins: row.wins,
+    losses: row.losses,
+    status: row.status,
+    createdAt: row.created_at,
     routes,
   };
 }
 
-export function serializeNews(n) {
+export function routeToJson(row) {
   return {
-    id: n.id,
-    title: n.title,
-    excerpt: n.excerpt,
-    createdAt: n.created_at,
+    id: row.id,
+    userId: row.user_id,
+    orderIndex: row.order_index,
+    route: row.route,
+    pokemonName: row.pokemon_name,
+    nickname: row.nickname,
+    level: row.level,
+    nature: row.nature,
+    status: row.status,
+    ability: row.ability,
+    item: row.item,
+    notes: row.notes,
+    isCustom: row.is_custom,
   };
 }
 
-export function serializeTrade(t) {
+export function newsToJson(row) {
+  return { id: row.id, title: row.title, excerpt: row.excerpt, createdAt: row.created_at };
+}
+
+export function wonderTradeToJson(row) {
   return {
-    id: t.id,
-    userId: t.user_id,
-    routeEntryId: t.route_entry_id,
-    pokemonName: t.pokemon_name,
-    routeName: t.route_name,
-    receivedPokemon: t.received_pokemon,
-    matchedWith: t.matched_with,
-    status: t.status,
-    createdAt: t.created_at,
-    resolvedAt: t.resolved_at,
+    id: row.id,
+    userId: row.user_id,
+    routeEntryId: row.route_entry_id,
+    pokemonName: row.pokemon_name,
+    routeName: row.route_name,
+    receivedPokemon: row.received_pokemon,
+    matchedWith: row.matched_with,
+    status: row.status,
+    createdAt: row.created_at,
+    resolvedAt: row.resolved_at,
+  };
+}
+
+export function directTradeToJson(row, extra = {}) {
+  return {
+    id: row.id,
+    fromUserId: row.from_user_id,
+    fromRouteEntryId: row.from_route_entry_id,
+    offeredPokemon: row.offered_pokemon,
+    offeredRouteName: row.offered_route_name,
+    requestedPokemon: row.requested_pokemon,
+    status: row.status,
+    toUserId: row.to_user_id,
+    toRouteEntryId: row.to_route_entry_id,
+    createdAt: row.created_at,
+    resolvedAt: row.resolved_at,
+    ...extra,
   };
 }

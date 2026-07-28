@@ -1,6 +1,6 @@
 # Nuzlocke Tournament Hub
 
-Hub del torneo Nuzlocke con backend real: **Supabase (Postgres)**, pensado
+Hub del torneo Nuzlocke con backend real: **Firebase (Firestore)**, pensado
 para desplegarse en **Vercel**. Cualquier persona puede iniciar sesión desde
 cualquier dispositivo y ver/editar su progreso, porque todo (participantes,
 fichas de ruta, noticias) vive en la base de datos, no en el navegador.
@@ -15,52 +15,53 @@ fichas de ruta, noticias) vive en la base de datos, no en el navegador.
   texto libre donde puedes escribir el nombre de **cualquier Pokémon**, y se
   busca su sprite automáticamente en la PokeAPI.
 - Los participantes, sus contraseñas (hasheadas) y sus 62 filas de ruta se
-  crean y leen desde **Postgres vía Supabase**, no en memoria del
+  crean y leen desde **Firestore vía Firebase Admin SDK**, no en memoria del
   navegador.
 - El branding ya no menciona "ORAS" — quedó genérico para poder reutilizarse
   en el siguiente torneo, sea cual sea el juego.
 
-## 1. Crear el proyecto de Supabase
+## 1. Crear el proyecto de Firebase
 
-1. Ve a [supabase.com/dashboard](https://supabase.com/dashboard) y crea un
-   proyecto nuevo (o usa uno existente). Elige una contraseña de base de
-   datos y guárdala por si la necesitas más adelante (no es ninguna de las
-   variables de entorno de abajo).
-2. Aplica el esquema: abre **SQL Editor** en el panel de Supabase, pega el
-   contenido de [`supabase/migrations/0001_init.sql`](./supabase/migrations/0001_init.sql)
-   y ejecútalo. Esto crea las tablas (`users`, `route_entries`, `news_posts`,
-   `wonder_trades`, `swiss_bracket`) y las funciones que necesita la API para
-   guardar cambios de forma atómica (crear participante + sus 62 filas,
-   actualizar una ficha y ajustar vidas, y emparejar Wonder Trade). Si
-   prefieres la CLI: `supabase db push` con este archivo dentro de
-   `supabase/migrations/`.
-3. Ve a **Project Settings → API** y copia:
-   - `SUPABASE_URL` → el campo "Project URL".
-   - `SUPABASE_SERVICE_ROLE_KEY` → el campo "service_role" (⚠️ no la "anon
-     public"; la service role tiene permisos totales y debe quedarse solo en
-     el backend).
-4. Añade también:
+1. Ve a la [Consola de Firebase](https://console.firebase.google.com/) y crea
+   un proyecto nuevo (o usa uno existente).
+2. Activa **Firestore Database** (modo producción está bien) desde
+   **Build → Firestore Database → Crear base de datos**.
+3. Genera una cuenta de servicio: **Configuración del proyecto (⚙️) →
+   Cuentas de servicio → Generar nueva clave privada**. Se descarga un JSON
+   con `project_id`, `client_email` y `private_key`.
+4. De ese JSON necesitas 3 datos para las variables de entorno:
+   - `FIREBASE_PROJECT_ID` → el `project_id`.
+   - `FIREBASE_CLIENT_EMAIL` → el `client_email`.
+   - `FIREBASE_PRIVATE_KEY` → el `private_key` (pégalo tal cual, con los
+     `\n` incluidos).
+5. Añade también:
    - `ADMIN_PASSWORD` → la contraseña que usará el/la administrador/a del
-     torneo para entrar. Además de esta (configurable sin tocar código),
-     `api/login.js` tiene una segunda contraseña fija escrita en el propio
-     código (`FIXED_ADMIN_PASSWORD`) que siempre funciona pase lo que pase
-     con la variable de entorno. ⚠️ Al quedar en el código, es visible para
-     cualquiera que vea el repositorio — solo úsala si el repo es privado y
-     confías en quién tiene acceso a él.
+     torneo para entrar.
    - `JWT_SECRET` → una cadena larga y aleatoria (por ejemplo, generada con
      `openssl rand -hex 32`).
 
-Define estas 4 variables tanto en tu `.env` local (copia `.env.example`)
+Define estas 5 variables tanto en tu `.env` local (copia `.env.example`)
 como en **Vercel → Project Settings → Environment Variables**.
 
-## 2. Seguridad de las tablas (RLS)
+No hace falta crear colecciones a mano: Firestore las crea solas la primera
+vez que la API escribe en ellas (`users`, `routeEntries`, `newsPosts`).
 
-La migración ya deja **Row Level Security** activado en las 5 tablas y sin
-ninguna policy, así que quedan cerradas a cualquier acceso directo (por
-ejemplo desde la `anon key` en el navegador). Toda la lectura/escritura pasa
-por las funciones serverless de `/api`, que usan la Service Role Key —esa
-sí puede saltarse RLS siempre—, igual que antes hacía el Admin SDK de
-Firebase con sus reglas de Firestore cerradas a `allow read, write: if false`.
+## 2. Reglas de seguridad de Firestore
+
+Como toda la lectura/escritura pasa por las funciones serverless de `/api`
+(que usan el Admin SDK, con permisos totales), puedes dejar el cliente de
+Firestore cerrado a accesos externos. En **Firestore → Reglas** puedes usar:
+
+```
+rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+    match /{document=**} {
+      allow read, write: if false;
+    }
+  }
+}
+```
 
 ## 3. Desarrollo local
 
@@ -69,19 +70,19 @@ npm install
 npm run dev
 ```
 
-Esto levanta Vite en local. Las funciones de `/api` (que usan el cliente de
-Supabase) se ejecutan tal cual cuando despliegas en Vercel; para probarlas
-en local con el mismo comportamiento de producción, usa `vercel dev`
-(instala la CLI de Vercel con `npm i -g vercel` si no la tienes) en vez de
+Esto levanta Vite en local. Las funciones de `/api` (que usan Firebase
+Admin) se ejecutan tal cual cuando despliegas en Vercel; para probarlas en
+local con el mismo comportamiento de producción, usa `vercel dev` (instala
+la CLI de Vercel con `npm i -g vercel` si no la tienes) en vez de
 `npm run dev`.
 
 ## 4. Desplegar en Vercel
 
 Sube el repositorio y conéctalo en Vercel (o `vercel --prod` desde la CLI).
-El build es el estándar de Vite: `npm run build`. Asegúrate de que las 4
-variables de entorno (`SUPABASE_URL`, `SUPABASE_SERVICE_ROLE_KEY`,
-`ADMIN_PASSWORD`, `JWT_SECRET`) estén definidas en el proyecto de Vercel
-antes de desplegar.
+El build es el estándar de Vite: `npm run build`. Asegúrate de que las 5
+variables de entorno (`FIREBASE_PROJECT_ID`, `FIREBASE_CLIENT_EMAIL`,
+`FIREBASE_PRIVATE_KEY`, `ADMIN_PASSWORD`, `JWT_SECRET`) estén definidas en
+el proyecto de Vercel antes de desplegar.
 
 ## 5. Primer uso
 
@@ -93,50 +94,47 @@ antes de desplegar.
 3. Comparte con cada jugador su nombre y contraseña: podrán entrar desde
    el móvil, el ordenador o cualquier dispositivo, eligiendo su nombre en
    la pestaña **Jugador** del login, y verán siempre los mismos datos
-   porque están en Supabase, no en su navegador.
+   porque están en Firestore, no en su navegador.
 
 ## Estructura relevante
 
 ```
-shared/constants.js             Rutas de Hoenn y colores, compartidos por frontend y API
-supabase/migrations/0001_init.sql  Esquema de tablas + funciones RPC transaccionales
-api/_lib/supabase.js            Cliente Supabase (service role) singleton
-api/_lib/serialize.js           Helpers snake_case (Postgres) -> camelCase (frontend)
-api/_lib/auth.js                JWT de sesión + guards de admin/usuario
-api/login.js                    POST — login de admin o de jugador
-api/users.js                    GET/POST/DELETE — participantes y sus fichas
-api/route-entry.js              PUT — guarda una fila de ruta/Pokémon
-api/custom-route.js             POST/DELETE — filas extra que cada participante se agrega solo
-api/wonder-trade.js             GET/POST/DELETE — intercambios prodigiosos
-api/bracket.js                  GET/POST/PUT/DELETE — Torneo Oficial (bracket suizo)
-api/news.js                     GET/POST — noticias del torneo
-src/api.js                      Cliente fetch del frontend hacia /api
-src/usePokemonSprite.js         Busca el sprite de cualquier Pokémon por nombre en la PokeAPI
+shared/constants.js      Rutas de Hoenn y colores, compartidos por frontend y API
+api/_lib/firebase.js     Cliente Firebase Admin (Firestore) singleton
+api/_lib/auth.js         JWT de sesión + guards de admin/usuario
+api/login.js             POST — login de admin o de jugador
+api/users.js             GET/POST/DELETE — participantes y sus fichas
+api/route-entry.js       PUT — guarda una fila de ruta/Pokémon
+api/custom-route.js      POST/DELETE — filas extra que cada participante se agrega solo
+api/wonder-trade.js      GET/POST/DELETE — intercambios prodigiosos
+api/bracket.js           GET/POST/PUT/DELETE — Torneo Oficial (bracket suizo)
+api/news.js              GET/POST — noticias del torneo
+src/api.js               Cliente fetch del frontend hacia /api
+src/usePokemonSprite.js  Busca el sprite de cualquier Pokémon por nombre en la PokeAPI
 ```
 
-### Modelo de datos en Supabase (Postgres)
+### Modelo de datos en Firestore
 
-- **`users`**: una fila por participante — `name`, `password` (hash
-  bcrypt), `color`, `lives`, `wins`, `losses`, `status`, `created_at`.
-- **`route_entries`**: una fila por fila de ruta, con `user_id` apuntando al
-  participante dueño (`ON DELETE CASCADE`) y `order_index` para el orden —
-  `route`, `pokemon_name`, `nickname`, `level`, `nature`, `status`,
-  `ability`, `item`, `notes`, y `is_custom = true` si la agregó el propio
+- **`users`** (colección): un doc por participante — `name`, `password`
+  (hash bcrypt), `color`, `lives`, `wins`, `losses`, `status`, `createdAt`.
+- **`routeEntries`** (colección): un doc por fila de ruta, con `userId`
+  apuntando al participante dueño y `orderIndex` para el orden — `route`,
+  `pokemonName`, `nickname`, `level`, `nature`, `status`, `ability`, `item`,
+  `notes`, y opcionalmente `isCustom: true` si la agregó el propio
   participante (en vez de venir de las 62 rutas fijas de Hoenn).
-- **`news_posts`**: `title`, `excerpt`, `created_at`.
-- **`wonder_trades`**: historial y cola de los Intercambios prodigiosos —
-  `user_id`, `route_entry_id`, `pokemon_name`, `status`
-  (`pending`/`completed`), `received_pokemon`, `matched_with`, `created_at`,
-  `resolved_at`.
-- **`swiss_bracket`** (una única fila `id = 'main'`): el Torneo Oficial —
-  su columna `data` (jsonb) guarda `title`, `status` (`active`/`finished`),
-  `participantIds`, `rounds` (array de fechas, cada una con sus combates).
-
-Las operaciones que antes usaban `batch`/`runTransaction` de Firestore
-(crear participante + sus 62 filas, guardar una ficha ajustando vidas, y
-emparejar Wonder Trade) ahora son funciones `plpgsql` (`create_participant`,
-`update_route_entry`, `wonder_trade_offer`) que Postgres ejecuta en una
-única transacción — ver `supabase/migrations/0001_init.sql`.
+- **`newsPosts`** (colección): `title`, `excerpt`, `createdAt`.
+- **`wonderTrades`** (colección): historial y cola de los Intercambios
+  prodigiosos — `userId`, `routeEntryId`, `pokemonName`, `status`
+  (`pending`/`completed`), `receivedPokemon`, `matchedWith`, `createdAt`,
+  `resolvedAt`.
+- **`directTrades`** (colección): tablón de Trueques directos — `fromUserId`,
+  `fromRouteEntryId`, `offeredPokemon`, `offeredRouteName`,
+  `requestedPokemon` (especie exacta que pide a cambio), `status`
+  (`pending`/`completed`), `toUserId`, `toRouteEntryId`, `createdAt`,
+  `resolvedAt`.
+- **`swissBracket`** (colección, un único documento `main`): el Torneo
+  Oficial — `title`, `status` (`active`/`finished`), `participantIds`,
+  `rounds` (array de fechas, cada una con sus combates).
 
 ## Funcionalidades nuevas
 
@@ -149,6 +147,17 @@ especie del otro en la misma fila que ofrecieron (apodo, nivel, naturaleza,
 etc. de esa fila se reinician porque pasa a ser un individuo distinto). Si
 nadie está esperando, la oferta queda en cola hasta que alguien mande la
 suya — se puede cancelar en cualquier momento antes de que se empareje.
+
+### Trueque directo (dentro de la pestaña "Intercambios", junto al Intercambio prodigioso)
+
+A diferencia del Intercambio prodigioso (emparejamiento al azar), aquí cada
+participante publica una oferta indicando **qué Pokémon da y qué especie
+exacta pide a cambio**. La oferta queda visible en un tablón para el resto
+de participantes; solo puede cancelarla quien la publicó, y solo puede
+aceptarla alguien que tenga esa especie exacta viva en una de sus filas —
+el trueque se resuelve al instante en cuanto alguien acepta (apodo, nivel,
+naturaleza, etc. de la fila involucrada se reinician, igual que en el
+Intercambio prodigioso, porque pasa a ser un individuo distinto).
 
 ### Filas propias en la ficha Nuzlocke ("Mi Perfil")
 
@@ -187,14 +196,14 @@ ejemplo de 32 jugadores / 3 fechas era solo ilustrativo) — funciona con
 cualquier número de participantes y el administrador decide cuándo generar
 la siguiente fecha o finalizar.
 
-### Índices de Postgres
+### Índices de Firestore que puede pedirte crear
 
-A diferencia de Firestore, aquí no hace falta crear índices sobre la marcha
-la primera vez que uses cada funcionalidad: la migración
-(`supabase/migrations/0001_init.sql`) ya crea los índices que necesitan las
-consultas de la API (`route_entries` por `user_id`/`order_index`,
-`wonder_trades` por `user_id`/`status`), así que no deberías ver errores de
-ese tipo.
+Como con `routeEntries`, la primera vez que uses cada funcionalidad nueva
+en producción, es posible que Firestore te muestre un error
+`FAILED_PRECONDITION: The query requires an index` con un link directo
+para crearlo (como ya te pasó antes). Es normal la primera vez: solo hay
+que abrir ese link y confirmar "Crear índice", esperar 1-5 minutos a que
+diga "Enabled", y volver a intentar.
 
 ## Notas y límites conocidos
 

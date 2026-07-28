@@ -1709,6 +1709,12 @@ function TrackerView({ users, role, session, onRouteChange, onAddCustomRoute, on
           {customError && <p className="text-xs text-red-400 mt-2">{customError}</p>}
         </Panel>
       )}
+
+      {isAdmin && (
+        <p className="text-xs text-gray-600 text-center">
+          El cuadro para agregar filas propias solo lo ve cada jugador cuando entra con su propia sesión, no el administrador viendo la ficha ajena.
+        </p>
+      )}
     </div>
   );
 }
@@ -1859,6 +1865,253 @@ function WonderTradeView({ session, users, onTraded }) {
           </div>
         )}
       </Panel>
+    </div>
+  );
+}
+
+/* ============================== TRUEQUE DIRECTO ============================== */
+
+function DirectTradeView({ session, users, onTraded }) {
+  const me = users.find((u) => u.id === session.userId);
+  const [board, setBoard] = useState([]);
+  const [mine, setMine] = useState([]);
+  const [history, setHistory] = useState([]);
+  const [loading, setLoading] = useState(true);
+  const [selectedRouteId, setSelectedRouteId] = useState('');
+  const [wanted, setWanted] = useState('');
+  const [acceptRouteByOffer, setAcceptRouteByOffer] = useState({});
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState('');
+  const [lastResult, setLastResult] = useState(null);
+
+  async function load() {
+    setLoading(true);
+    try {
+      const data = await api.getDirectTrades();
+      setBoard(data.board || []);
+      setMine(data.mine || []);
+      setHistory(data.history || []);
+    } catch (err) {
+      setError(err.message || 'No se pudieron cargar los trueques.');
+    } finally {
+      setLoading(false);
+    }
+  }
+
+  useEffect(() => { load(); }, []);
+
+  const eligible = (me ? me.routes : []).filter((r) => r.status === 'Vivo' && r.pokemonName && r.pokemonName.trim());
+
+  async function handleOffer() {
+    if (!selectedRouteId || !wanted.trim()) return;
+    setBusy(true);
+    setError('');
+    try {
+      await api.offerDirectTrade(selectedRouteId, wanted.trim());
+      setSelectedRouteId('');
+      setWanted('');
+      await load();
+    } catch (err) {
+      setError(err.message || 'No se pudo publicar la oferta.');
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function handleCancel(id) {
+    setBusy(true);
+    setError('');
+    try {
+      await api.cancelDirectTrade(id);
+      await load();
+    } catch (err) {
+      setError(err.message || 'No se pudo cancelar la oferta.');
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function handleAccept(offerId) {
+    const routeEntryId = acceptRouteByOffer[offerId];
+    if (!routeEntryId) return;
+    setBusy(true);
+    setError('');
+    setLastResult(null);
+    try {
+      const res = await api.acceptDirectTrade(offerId, routeEntryId);
+      setLastResult({ given: res.given, received: res.received });
+      onTraded();
+      await load();
+    } catch (err) {
+      setError(err.message || 'No se pudo aceptar el trueque.');
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  if (!me) {
+    return (
+      <Panel className="flex flex-col items-center justify-center gap-2 py-14 text-gray-600 border-dashed">
+        <ArrowLeftRight className="w-8 h-8" />
+        <span className="text-sm">Tu ficha todavía no se ha generado.</span>
+      </Panel>
+    );
+  }
+
+  return (
+    <div className="space-y-4">
+      <Panel>
+        <h2 className="font-display text-xl font-bold text-white flex items-center gap-2 tracking-wide">
+          <ArrowLeftRight className="w-5 h-5 text-amber-400" /> TRUEQUE DIRECTO
+        </h2>
+        <p className="text-sm text-gray-500 mt-1">
+          Publica una oferta indicando qué Pokémon das y qué especie pides a cambio. Queda visible para el resto
+          hasta que alguien con esa especie exacta la acepte, o hasta que la canceles.
+        </p>
+      </Panel>
+
+      {error && <p className="text-sm text-red-400">{error}</p>}
+
+      {lastResult && (
+        <Panel className="border-emerald-800/60 bg-emerald-950/20">
+          <p className="text-sm text-emerald-300 font-semibold">¡Trueque realizado!</p>
+          <p className="text-sm text-gray-400 mt-1">Diste <span className="text-gray-200 font-medium">{lastResult.given}</span> y recibiste <span className="text-emerald-300 font-medium">{lastResult.received}</span>.</p>
+        </Panel>
+      )}
+
+      <Panel>
+        <h3 className="text-white font-semibold mb-3">Publicar una oferta</h3>
+        {mine.length > 0 ? (
+          <div className="space-y-2">
+            {mine.map((o) => (
+              <div key={o.id} className="flex items-center justify-between text-sm bg-amber-950/10 border border-amber-800/60 rounded-lg px-3 py-2">
+                <span className="text-gray-400">Ofreces <span className="text-gray-200">{o.offeredPokemon}</span>, pides <span className="text-amber-300">{o.requestedPokemon}</span></span>
+                <button type="button" onClick={() => handleCancel(o.id)} disabled={busy} className="text-xs text-red-400 hover:text-red-300 disabled:opacity-50 shrink-0 ml-3">Cancelar</button>
+              </div>
+            ))}
+          </div>
+        ) : eligible.length === 0 ? (
+          <p className="text-sm text-gray-600">No tienes Pokémon vivos con especie asignada todavía. Completa tu ficha en "Mi Perfil" primero.</p>
+        ) : (
+          <div className="flex flex-col sm:flex-row gap-2">
+            <select value={selectedRouteId} onChange={(e) => setSelectedRouteId(e.target.value)} className={`${inputClass} flex-1`}>
+              <option value="">¿Qué Pokémon ofreces?…</option>
+              {eligible.map((r) => (
+                <option key={r.id} value={r.id}>{r.pokemonName} — {r.nickname || r.route}</option>
+              ))}
+            </select>
+            <input
+              value={wanted}
+              onChange={(e) => setWanted(e.target.value)}
+              placeholder="¿Qué especie pides a cambio?…"
+              className={`${inputClass} flex-1`}
+            />
+            <button
+              type="button"
+              onClick={handleOffer}
+              disabled={busy || !selectedRouteId || !wanted.trim()}
+              className="flex items-center justify-center gap-1.5 bg-red-600 hover:bg-red-500 disabled:opacity-50 disabled:cursor-not-allowed text-white text-sm font-semibold px-4 py-1.5 rounded-lg transition-colors shrink-0"
+            >
+              <ArrowLeftRight className="w-4 h-4" /> Publicar
+            </button>
+          </div>
+        )}
+      </Panel>
+
+      <Panel>
+        <h3 className="text-white font-semibold mb-3">Tablón de ofertas</h3>
+        {loading ? (
+          <p className="text-sm text-gray-600">Cargando…</p>
+        ) : board.length === 0 ? (
+          <p className="text-sm text-gray-600">No hay ofertas de otros participantes por ahora.</p>
+        ) : (
+          <div className="space-y-3">
+            {board.map((o) => {
+              const myMatches = eligible.filter((r) => r.pokemonName.trim().toLowerCase() === o.requestedPokemon.trim().toLowerCase());
+              return (
+                <div key={o.id} className="bg-gray-800/40 rounded-lg px-3 py-2.5">
+                  <p className="text-sm text-gray-400">
+                    <span className="text-gray-200 font-medium">{o.fromUserName}</span> da <span className="text-gray-200">{o.offeredPokemon}</span> y pide <span className="text-amber-300">{o.requestedPokemon}</span>
+                  </p>
+                  {myMatches.length > 0 ? (
+                    <div className="flex flex-col sm:flex-row gap-2 mt-2">
+                      <select
+                        value={acceptRouteByOffer[o.id] || ''}
+                        onChange={(e) => setAcceptRouteByOffer((prev) => ({ ...prev, [o.id]: e.target.value }))}
+                        className={`${inputClass} flex-1`}
+                      >
+                        <option value="">Elige cuál de tus {o.requestedPokemon} das…</option>
+                        {myMatches.map((r) => (
+                          <option key={r.id} value={r.id}>{r.pokemonName} — {r.nickname || r.route}</option>
+                        ))}
+                      </select>
+                      <button
+                        type="button"
+                        onClick={() => handleAccept(o.id)}
+                        disabled={busy || !acceptRouteByOffer[o.id]}
+                        className="flex items-center justify-center gap-1.5 bg-emerald-600 hover:bg-emerald-500 disabled:opacity-50 disabled:cursor-not-allowed text-white text-sm font-semibold px-4 py-1.5 rounded-lg transition-colors shrink-0"
+                      >
+                        <ArrowLeftRight className="w-4 h-4" /> Aceptar
+                      </button>
+                    </div>
+                  ) : (
+                    <p className="text-xs text-gray-600 mt-1">No tienes un {o.requestedPokemon} vivo para aceptarla.</p>
+                  )}
+                </div>
+              );
+            })}
+          </div>
+        )}
+      </Panel>
+
+      <Panel>
+        <h3 className="text-white font-semibold mb-3">Historial</h3>
+        {history.length === 0 ? (
+          <p className="text-sm text-gray-600">Todavía no hiciste ningún trueque directo.</p>
+        ) : (
+          <div className="space-y-2">
+            {history.map((h) => {
+              const wasMine = h.fromUserId === session.userId;
+              return (
+                <div key={h.id} className="flex items-center justify-between text-sm bg-gray-800/40 rounded-lg px-3 py-2">
+                  <span className="text-gray-400">Diste <span className="text-gray-200">{wasMine ? h.offeredPokemon : h.requestedPokemon}</span></span>
+                  <ArrowLeftRight className="w-3.5 h-3.5 text-gray-600 shrink-0" />
+                  <span className="text-gray-400">Recibiste <span className="text-emerald-300">{wasMine ? h.requestedPokemon : h.offeredPokemon}</span></span>
+                </div>
+              );
+            })}
+          </div>
+        )}
+      </Panel>
+    </div>
+  );
+}
+
+/* ============================== INTERCAMBIOS (pestañas) ============================== */
+
+function IntercambiosView({ session, users, onTraded }) {
+  const [tab, setTab] = useState('prodigioso');
+  const tabs = [
+    { key: 'prodigioso', label: 'Intercambio prodigioso' },
+    { key: 'directo', label: 'Trueque directo' },
+  ];
+  return (
+    <div className="space-y-4">
+      <div className="flex gap-2">
+        {tabs.map((t) => (
+          <button
+            type="button"
+            key={t.key}
+            onClick={() => setTab(t.key)}
+            className={`px-3 py-1.5 rounded-full border text-sm transition-colors ${tab === t.key ? 'bg-red-600/20 border-red-500 text-red-300' : 'bg-gray-800/60 border-gray-700 text-gray-400 hover:text-gray-200'}`}
+          >
+            {t.label}
+          </button>
+        ))}
+      </div>
+      {tab === 'prodigioso'
+        ? <WonderTradeView session={session} users={users} onTraded={onTraded} />
+        : <DirectTradeView session={session} users={users} onTraded={onTraded} />}
     </div>
   );
 }
@@ -2205,7 +2458,7 @@ export default function App() {
               />
             )}
             {view === 'intercambios' && role === 'Usuario' && (
-              <WonderTradeView session={session} users={users} onTraded={refreshUsers} />
+              <IntercambiosView session={session} users={users} onTraded={refreshUsers} />
             )}
             {view === 'ruleta' && role === 'Administrador' && (
               <RouletteView

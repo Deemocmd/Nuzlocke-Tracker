@@ -1,10 +1,10 @@
-import { supabase, TABLES } from './_lib/supabase.js';
+import { supabase } from './_lib/supabase.js';
 import { requireUserOrAdmin, allowCors } from './_lib/auth.js';
-import { serializeRoute } from './_lib/serialize.js';
+import { routeToJson } from './_lib/serialize.js';
 
 // --------------------------------------------------------------------------
 // Filas personalizadas de la ficha Nuzlocke: cada participante puede
-// agregarse (o borrarse) filas extra además de sus 62 rutas fijas de Hoenn.
+// agregarse (o borrarse) filas extra además de sus rutas fijas de Hoenn.
 // Solo el dueño de la ficha puede tocar sus propias filas personalizadas.
 // --------------------------------------------------------------------------
 
@@ -32,35 +32,24 @@ export default async function handler(req, res) {
         return;
       }
 
-      const { data: existing, error: existErr } = await supabase
-        .from(TABLES.routeEntries)
-        .select('order_index')
-        .eq('user_id', session.userId);
-      if (existErr) throw existErr;
-      const maxIndex = existing.reduce((max, r) => Math.max(max, r.order_index || 0), 0);
-      const nextIndex = maxIndex + 1;
+      const { data: existing, error: existingError } = await supabase
+        .from('route_entries').select('order_index').eq('user_id', session.userId);
+      if (existingError) throw existingError;
+      const maxIndex = (existing || []).reduce((max, r) => Math.max(max, r.order_index || 0), 0);
 
-      const { data: inserted, error } = await supabase
-        .from(TABLES.routeEntries)
+      const { data: created, error: insertError } = await supabase
+        .from('route_entries')
         .insert({
           user_id: session.userId,
-          order_index: nextIndex,
+          order_index: maxIndex + 1,
           route: trimmed,
-          pokemon_name: null,
-          nickname: '',
-          level: null,
-          nature: '',
           status: 'Vivo',
-          ability: '',
-          item: '',
-          notes: '',
           is_custom: true,
         })
         .select()
         .single();
-      if (error) throw error;
-
-      res.status(201).json(serializeRoute(inserted));
+      if (insertError) throw insertError;
+      res.status(201).json(routeToJson(created));
     } catch (err) {
       console.error(err);
       res.status(500).json({ error: 'No se pudo agregar la fila.' });
@@ -75,25 +64,19 @@ export default async function handler(req, res) {
         res.status(400).json({ error: 'Falta el id de la fila.' });
         return;
       }
-
-      const { data: row, error } = await supabase
-        .from(TABLES.routeEntries)
-        .select('*')
-        .eq('id', String(id))
-        .maybeSingle();
-      if (error) throw error;
-      if (!row || row.user_id !== session.userId) {
+      const { data: existing, error: findError } = await supabase
+        .from('route_entries').select('*').eq('id', id).maybeSingle();
+      if (findError) throw findError;
+      if (!existing || existing.user_id !== session.userId) {
         res.status(404).json({ error: 'Esa fila no existe o no te pertenece.' });
         return;
       }
-      if (!row.is_custom) {
+      if (!existing.is_custom) {
         res.status(403).json({ error: 'Solo puedes eliminar filas que hayas agregado tú mismo.' });
         return;
       }
-
-      const { error: delErr } = await supabase.from(TABLES.routeEntries).delete().eq('id', String(id));
-      if (delErr) throw delErr;
-
+      const { error: deleteError } = await supabase.from('route_entries').delete().eq('id', id);
+      if (deleteError) throw deleteError;
       res.status(200).json({ ok: true });
     } catch (err) {
       console.error(err);

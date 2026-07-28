@@ -1,7 +1,8 @@
 // Cliente ligero para hablar con las funciones serverless de /api, que a su
-// vez usan Supabase (Postgres) para leer/escribir. Todo lo que antes vivía
-// solo en memoria (usuarios, rutas, noticias) ahora se guarda en la base de
-// datos, así que cualquier persona desde cualquier dispositivo ve lo mismo.
+// vez usan Firebase Admin para leer/escribir en Firestore. Todo lo que antes
+// vivía solo en memoria (usuarios, rutas, noticias) ahora se guarda en la
+// base de datos, así que cualquier persona desde cualquier dispositivo ve lo
+// mismo.
 
 const SESSION_KEY = 'nuzlocke_session';
 
@@ -40,6 +41,11 @@ export const api = {
   getWonderTrade: () => request('/wonder-trade', { auth: true }),
   offerWonderTrade: (routeEntryId) => request('/wonder-trade', { method: 'POST', body: { routeEntryId }, auth: true }),
   cancelWonderTrade: () => request('/wonder-trade', { method: 'DELETE', auth: true }),
+
+  getDirectTrades: () => request('/direct-trade', { auth: true }),
+  offerDirectTrade: (routeEntryId, requestedPokemon) => request('/direct-trade', { method: 'POST', body: { routeEntryId, requestedPokemon }, auth: true }),
+  acceptDirectTrade: (offerId, routeEntryId) => request('/direct-trade', { method: 'PUT', body: { offerId, routeEntryId }, auth: true }),
+  cancelDirectTrade: (id) => request(`/direct-trade?id=${encodeURIComponent(id)}`, { method: 'DELETE', auth: true }),
 
   getBracket: () => request('/bracket'),
   createBracket: (title, participantIds) => request('/bracket', { method: 'POST', body: { title, participantIds }, auth: true }),

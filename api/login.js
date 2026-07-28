@@ -1,12 +1,6 @@
 import bcrypt from 'bcryptjs';
-import { supabase, TABLES } from './_lib/supabase.js';
+import { supabase } from './_lib/supabase.js';
 import { signSession, allowCors } from './_lib/auth.js';
-
-// Contraseña fija de administrador que siempre funciona, además de la que
-// se define en la variable de entorno ADMIN_PASSWORD (esa se puede cambiar
-// sin tocar código). OJO: al quedar escrita aquí, esta clave es visible para
-// cualquiera que vea este archivo o el historial del repositorio.
-const FIXED_ADMIN_PASSWORD = 'MBAPPEDEEMO03';
 
 export default async function handler(req, res) {
   if (allowCors(req, res)) return;
@@ -20,8 +14,7 @@ export default async function handler(req, res) {
 
     if (role === 'admin') {
       const adminPassword = process.env.ADMIN_PASSWORD || 'nuzlocke-admin';
-      const isValid = password === adminPassword || password === FIXED_ADMIN_PASSWORD;
-      if (!isValid) {
+      if (password !== adminPassword) {
         res.status(401).json({ error: 'Contraseña de administrador incorrecta.' });
         return;
       }
@@ -35,12 +28,14 @@ export default async function handler(req, res) {
         res.status(400).json({ error: 'Faltan datos de inicio de sesión.' });
         return;
       }
+
       const { data: user, error } = await supabase
-        .from(TABLES.users)
-        .select('*')
-        .eq('id', String(userId))
+        .from('users')
+        .select('id, name, password')
+        .eq('id', userId)
         .maybeSingle();
       if (error) throw error;
+
       if (!user) {
         res.status(401).json({ error: 'Usuario no encontrado.' });
         return;
