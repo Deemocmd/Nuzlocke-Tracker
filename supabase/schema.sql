@@ -97,6 +97,7 @@ create table if not exists swiss_bracket (
 -- "participants" (o null si es un BYE).
 create table if not exists playoff_bracket (
   id text primary key,
+  title text not null default 'Playoffs',
   status text not null default 'active',
   participants jsonb not null default '[]',
   rounds jsonb not null default '[]'

@@ -75,12 +75,13 @@ async function loadPlayoff() {
   const { data, error } = await supabase.from('playoff_bracket').select('*').eq('id', DOC_ID).maybeSingle();
   if (error) throw error;
   if (!data) return null;
-  return { status: data.status, participants: data.participants, rounds: data.rounds };
+  return { title: data.title, status: data.status, participants: data.participants, rounds: data.rounds };
 }
 
 async function savePlayoff(p) {
   const { error } = await supabase.from('playoff_bracket').upsert({
     id: DOC_ID,
+    title: p.title || 'Playoffs',
     status: p.status,
     participants: p.participants,
     rounds: p.rounds,
