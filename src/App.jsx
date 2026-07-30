@@ -853,7 +853,7 @@ function SwissMatchCard({ match, userMap, editable, onSetWinner, moveSource, onM
   );
 }
 
-function SwissBracketView({ users, role, bracket, loading, onCreate, onSetWinner, onSwap, onAdvanceRound, onFinish, onReset }) {
+function SwissBracketView({ users, role, bracket, loading, onCreate, onSetWinner, onSwap, onAdvanceRound, onFinish, onReset, playoff, onGeneratePlayoff, onGoToPlayoffs }) {
   const isAdmin = role === 'Administrador';
   const userMap = useMemo(() => Object.fromEntries(users.map((u) => [u.id, u])), [users]);
 
@@ -937,6 +937,19 @@ function SwissBracketView({ users, role, bracket, loading, onCreate, onSetWinner
       setSelected([]);
     } catch (err) {
       setError(err.message || 'No se pudo reiniciar el torneo.');
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function handleGeneratePlayoffs() {
+    setBusy(true);
+    setError('');
+    try {
+      await onGeneratePlayoff();
+      if (onGoToPlayoffs) onGoToPlayoffs();
+    } catch (err) {
+      setError(err.message || 'No se pudo generar el cuadro de playoffs.');
     } finally {
       setBusy(false);
     }
@@ -1113,6 +1126,23 @@ function SwissBracketView({ users, role, bracket, loading, onCreate, onSetWinner
               </div>
             ))}
           </div>
+          {isAdmin && (
+            <div className="mt-4 pt-4 border-t border-amber-900/40 flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3">
+              <p className="text-xs text-gray-500 max-w-md">
+                {playoff
+                  ? 'Ya se generó el cuadro de playoffs a partir de esta clasificación. Podés volver a generarlo si cambiaste algún resultado.'
+                  : 'Con esta clasificación final ya se puede armar el cuadro de eliminación directa (Playoffs): se siembra solo, mejor récord primero y vidas restantes como desempate.'}
+              </p>
+              <button
+                type="button"
+                onClick={handleGeneratePlayoffs}
+                disabled={busy}
+                className="flex items-center justify-center gap-1.5 bg-amber-600 hover:bg-amber-500 disabled:opacity-50 text-white text-xs font-semibold px-4 py-2 rounded-lg transition-colors shrink-0"
+              >
+                <Trophy className="w-3.5 h-3.5" /> {playoff ? 'Regenerar playoffs' : 'Generar playoffs con esta clasificación'}
+              </button>
+            </div>
+          )}
         </Panel>
       )}
     </div>
@@ -2538,6 +2568,9 @@ export default function App() {
                 onAdvanceRound={bracketAdvanceRound}
                 onFinish={bracketFinish}
                 onReset={resetBracket}
+                playoff={playoff}
+                onGeneratePlayoff={generatePlayoff}
+                onGoToPlayoffs={() => setView('playoffs')}
               />
             )}
             {view === 'intercambios' && role === 'Usuario' && (
