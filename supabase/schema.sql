@@ -88,6 +88,20 @@ create table if not exists swiss_bracket (
   rounds jsonb not null default '[]'
 );
 
+-- El cuadro de playoffs (eliminación directa) también se guarda como una
+-- única fila ("main"). Se genera a partir de la clasificación final del
+-- bracket suizo. "participants" guarda una instantánea (id, nombre, color)
+-- de cada sembrado, para que el cuadro no se rompa si más adelante se borra
+-- a algún usuario. "rounds" es un array de rondas, cada una un array de
+-- combates { id, p1, p2, winner } donde p1/p2/winner son ids de
+-- "participants" (o null si es un BYE).
+create table if not exists playoff_bracket (
+  id text primary key,
+  status text not null default 'active',
+  participants jsonb not null default '[]',
+  rounds jsonb not null default '[]'
+);
+
 -- -----------------------------------------------------------------------------
 -- Row Level Security: la app solo habla con Supabase desde las funciones
 -- serverless de /api usando la Service Role Key (que salta RLS). Dejamos RLS
@@ -100,6 +114,7 @@ alter table news_posts enable row level security;
 alter table wonder_trades enable row level security;
 alter table direct_trades enable row level security;
 alter table swiss_bracket enable row level security;
+alter table playoff_bracket enable row level security;
 
 -- -----------------------------------------------------------------------------
 -- Funciones transaccionales (plpgsql)
