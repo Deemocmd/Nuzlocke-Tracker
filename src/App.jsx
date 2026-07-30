@@ -28,8 +28,14 @@ const ROULETTE_SEGMENTS = [
 
 /* ---------- Bracket de eliminación directa · 32 participantes ---------- */
 
-const BRACKET_ROUND_LABELS = ['Dieciseisavos', 'Octavos', 'Cuartos', 'Semifinal', 'Final'];
+const BRACKET_ROUND_LABEL_POOL = ['Dieciseisavos', 'Octavos', 'Cuartos', 'Semifinal', 'Final'];
 const BRACKET_ROUND_COLORS = ['#dc2626', '#ea580c', '#f59e0b', '#eab308', '#facc15'];
+// Un cuadro de playoffs puede tener menos de 5 rondas (ej: 8 u 16
+// participantes en vez de 32) — tomamos las últimas N etiquetas del pool
+// para que siempre termine en "Final".
+function bracketRoundLabels(roundCount) {
+  return BRACKET_ROUND_LABEL_POOL.slice(BRACKET_ROUND_LABEL_POOL.length - roundCount);
+}
 
 const STATUS_STYLES = {
   Vivo: 'bg-emerald-500/10 text-emerald-400 border-emerald-500/30',
@@ -522,8 +528,8 @@ function BracketMatchCard({ match, roundIndex, matchIndex, color, hoveredName, o
   const clickable = editable && Boolean(match.p1 && match.p2);
   return (
     <div ref={cardRef} className="flex flex-col gap-1 bg-gray-900/70 border rounded-xl p-1.5" style={{ borderColor: `${color}55`, width: 192 }}>
-      <BracketSlot player={match.p1} isWinner={Boolean(match.winner && match.p1 && match.winner.id === match.p1.id)} hoveredName={hoveredName} onHover={onHover} clickable={clickable} onClick={() => onSetWinner(match.id, match.p1?.id)} />
-      <BracketSlot player={match.p2} isWinner={Boolean(match.winner && match.p2 && match.winner.id === match.p2.id)} hoveredName={hoveredName} onHover={onHover} clickable={clickable} onClick={() => onSetWinner(match.id, match.p2?.id)} />
+      <BracketSlot player={match.p1} isWinner={Boolean(match.winner && match.p1 && match.winner.name === match.p1.name)} hoveredName={hoveredName} onHover={onHover} clickable={clickable} onClick={() => onSetWinner(roundIndex, matchIndex, match.p1)} />
+      <BracketSlot player={match.p2} isWinner={Boolean(match.winner && match.p2 && match.winner.name === match.p2.name)} hoveredName={hoveredName} onHover={onHover} clickable={clickable} onClick={() => onSetWinner(roundIndex, matchIndex, match.p2)} />
     </div>
   );
 }
@@ -563,75 +569,8 @@ function BracketLines({ lines, hoveredName }) {
   );
 }
 
-function buildFirstRoundPairings(participantIds) {
-  const slots = [...participantIds];
-  while (slots.length < 32) slots.push(null);
-  return Array.from({ length: 16 }, (_, i) => ({
-    p1Id: slots[i * 2] || null,
-    p2Id: slots[i * 2 + 1] || null,
-  }));
-}
-
-function validateFirstRoundPairings(matches, participantIds = null) {
-  const allowed = participantIds ? new Set(participantIds) : null;
-  const seen = new Set();
-
-  for (let i = 0; i < matches.length; i++) {
-    const p1Id = matches[i]?.p1Id ?? null;
-    const p2Id = matches[i]?.p2Id ?? null;
-
-    if (p1Id && p2Id && p1Id === p2Id) {
-      return `El combate ${i + 1} no puede enfrentar al mismo jugador consigo mismo.`;
-    }
-
-    for (const id of [p1Id, p2Id]) {
-      if (!id) continue;
-      if (allowed && !allowed.has(id)) return 'Hay un jugador que no está en la lista de participantes.';
-      if (seen.has(id)) return 'Un jugador no puede aparecer en más de un combate de dieciseisavos.';
-      seen.add(id);
-    }
-  }
-
-  return null;
-}
-
-function firstRoundSlotOptions(firstRound, matchIndex, slotKey, participantIds) {
-  const used = new Set();
-  firstRound.forEach((pair) => {
-    if (pair.p1Id) used.add(pair.p1Id);
-    if (pair.p2Id) used.add(pair.p2Id);
-  });
-  const current = firstRound[matchIndex]?.[slotKey] || null;
-  return participantIds.filter((id) => !used.has(id) || id === current);
-}
-
-function resolvePlayoffSlot(playerId, roundIndex, userMap) {
-  if (playerId === null) return roundIndex === 0 ? null : undefined;
-  if (!playerId) return undefined;
-  const u = userMap[playerId];
-  return u ? { id: u.id, name: u.name, color: u.color } : null;
-}
-
-function playoffBracketToRounds(bracket, userMap) {
-  return (bracket.rounds || []).map((round, ri) =>
-    round.map((m) => ({
-      id: m.id,
-      p1: resolvePlayoffSlot(m.p1Id, ri, userMap),
-      p2: resolvePlayoffSlot(m.p2Id, ri, userMap),
-      winner: m.winnerId ? resolvePlayoffSlot(m.winnerId, ri, userMap) : null,
-    })),
-  );
-}
-
-function Bracket32View({
-  users, role, bracket, loading, onCreate, onSetWinner, onSetFirstRound, onFinish, onReset,
-}) {
+function Bracket32View({ role, playoff, loading, swissStatus, onGenerate, onSetWinner, onReset }) {
   const isAdmin = role === 'Administrador';
-  const userMap = useMemo(() => Object.fromEntries(users.map((u) => [u.id, u])), [users]);
-
-  const [selected, setSelected] = useState([]);
-  const [title, setTitle] = useState('Playoffs');
-  const [firstRound, setFirstRound] = useState(() => buildFirstRoundPairings([]));
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState('');
   const [hoveredName, setHoveredName] = useState(null);
@@ -639,105 +578,71 @@ function Bracket32View({
   const containerRef = useRef(null);
   const cardRefs = useRef({}).current;
 
-  const rounds = useMemo(
-    () => (bracket ? playoffBracketToRounds(bracket, userMap) : []),
-    [bracket, userMap],
+  const participantMap = useMemo(
+    () => Object.fromEntries((playoff?.participants || []).map((p) => [p.id, p])),
+    [playoff],
+  );
+  // Traduce los ids guardados en el backend a objetos {id, name, color}
+  // conservando la distinción entre "BYE" (null) y "todavía no definido"
+  // (undefined), igual que hacía el armado local anterior.
+  function resolve(id) {
+    if (id === undefined) return undefined;
+    if (id === null) return null;
+    return participantMap[id] || { id, name: '???', color: '#6b7280' };
+  }
+  const displayRounds = useMemo(
+    () => (playoff?.rounds || []).map((round) => round.map((m) => ({
+      id: m.id, p1: resolve(m.p1), p2: resolve(m.p2), winner: resolve(m.winner),
+    }))),
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [playoff],
   );
 
-  function toggleSelected(id) {
-    setSelected((prev) => {
-      if (prev.includes(id)) return prev.filter((x) => x !== id);
-      if (prev.length >= 32) return prev;
-      return [...prev, id];
-    });
-  }
+  function setCardRef(key) { return (el) => { cardRefs[key] = el; }; }
 
-  function autoFillFirstRound(ids) {
-    setFirstRound(buildFirstRoundPairings(ids));
-  }
-
-  useEffect(() => {
-    if (!bracket) autoFillFirstRound(selected);
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [selected.join('|')]);
-
-  async function handleCreate() {
-    if (selected.length < 1) { setError('Selecciona al menos 1 participante.'); return; }
-    const pairingError = validateFirstRoundPairings(firstRound, selected);
-    if (pairingError) { setError(pairingError); return; }
+  async function handleGenerate() {
     setBusy(true);
     setError('');
     try {
-      await onCreate(title, selected, firstRound);
-      setSelected([]);
+      await onGenerate();
     } catch (err) {
-      setError(err.message || 'No se pudo crear el cuadro.');
-    } finally {
-      setBusy(false);
-    }
-  }
-
-  async function handleSetWinner(matchId, winnerId) {
-    if (!isAdmin || !winnerId) return;
-    setError('');
-    try {
-      await onSetWinner(matchId, winnerId);
-    } catch (err) {
-      setError(err.message || 'No se pudo guardar el resultado.');
-    }
-  }
-
-  async function handleSaveFirstRound() {
-    const participantIds = bracket?.participantIds || [];
-    const pairingError = validateFirstRoundPairings(firstRound, participantIds);
-    if (pairingError) { setError(pairingError); return; }
-    setBusy(true);
-    setError('');
-    try {
-      await onSetFirstRound(firstRound);
-    } catch (err) {
-      setError(err.message || 'No se pudieron guardar los emparejamientos.');
-    } finally {
-      setBusy(false);
-    }
-  }
-
-  async function handleFinish() {
-    setBusy(true);
-    setError('');
-    try {
-      await onFinish();
-    } catch (err) {
-      setError(err.message || 'No se pudo finalizar el cuadro.');
+      setError(err.message || 'No se pudo generar el cuadro de playoffs.');
     } finally {
       setBusy(false);
     }
   }
 
   async function handleReset() {
-    if (!window.confirm('Esto borra el cuadro de playoffs por completo. ¿Continuar?')) return;
+    if (!window.confirm('Esto borra el cuadro de playoffs actual por completo. ¿Continuar?')) return;
     setBusy(true);
     setError('');
     try {
       await onReset();
-      setSelected([]);
-      setFirstRound(buildFirstRoundPairings([]));
     } catch (err) {
-      setError(err.message || 'No se pudo reiniciar el cuadro.');
+      setError(err.message || 'No se pudo reiniciar los playoffs.');
     } finally {
       setBusy(false);
     }
   }
 
-  function setCardRef(key) { return (el) => { cardRefs[key] = el; }; }
+  async function handleSetWinner(roundIndex, matchIndex, player) {
+    if (!isAdmin || !player) return;
+    const matchId = displayRounds[roundIndex][matchIndex].id;
+    setError('');
+    try {
+      await onSetWinner(matchId, player.id);
+    } catch (err) {
+      setError(err.message || 'No se pudo guardar el resultado.');
+    }
+  }
 
   useEffect(() => {
     function computeLines() {
-      if (!containerRef.current || rounds.length === 0) return;
+      if (!containerRef.current || displayRounds.length === 0) return;
       const containerRect = containerRef.current.getBoundingClientRect();
       const next = [];
-      for (let r = 0; r < rounds.length - 1; r++) {
-        rounds[r].forEach((m, i) => {
+      for (let r = 0; r < displayRounds.length - 1; r++) {
+        displayRounds[r].forEach((m, i) => {
           const srcEl = cardRefs[`${r}-${i}`];
           const tgtEl = cardRefs[`${r + 1}-${Math.floor(i / 2)}`];
           if (!srcEl || !tgtEl) return;
@@ -760,121 +665,57 @@ function Bracket32View({
     computeLines();
     window.addEventListener('resize', computeLines);
     return () => window.removeEventListener('resize', computeLines);
-  }, [rounds]);
-
-  useEffect(() => {
-    if (bracket?.rounds?.[0]) {
-      setFirstRound(bracket.rounds[0].map((m) => ({ p1Id: m.p1Id ?? null, p2Id: m.p2Id ?? null })));
-    }
-  }, [bracket]);
+  }, [displayRounds, cardRefs]);
 
   if (loading) {
     return <Panel><p className="text-sm text-gray-600">Cargando…</p></Panel>;
   }
 
-  if (!bracket) {
-    if (!isAdmin) {
-      return (
-        <Panel className="flex flex-col items-center justify-center gap-2 py-14 text-gray-600 border-dashed">
-          <Trophy className="w-8 h-8" />
-          <span className="text-sm">El administrador todavía no configuró el cuadro de Playoffs.</span>
-        </Panel>
-      );
-    }
+  if (!playoff) {
     return (
       <div className="space-y-4">
-        <Panel>
-          <h2 className="font-display text-xl font-bold text-white flex items-center gap-2 tracking-wide"><Trophy className="w-5 h-5 text-amber-400" /> PLAYOFFS · CUADRO DE 32</h2>
-          <p className="text-sm text-gray-500 mt-1">Elige hasta 32 participantes y asigna los emparejamientos de dieciseisavos. Los BYES se rellenan solos si faltan jugadores.</p>
-        </Panel>
-        <Panel>
-          <h3 className="text-white font-semibold mb-3">Configurar cuadro</h3>
-          <input value={title} onChange={(e) => setTitle(e.target.value)} placeholder="Título" className={`${inputClass} w-full mb-3`} />
-          {users.length === 0 ? (
-            <p className="text-sm text-gray-600">Todavía no hay participantes creados.</p>
-          ) : (
+        <Panel className="flex flex-col items-center justify-center gap-3 py-14 text-gray-600 border-dashed text-center">
+          <Trophy className="w-8 h-8" />
+          {swissStatus === 'finished' ? (
             <>
-              <p className="text-xs text-gray-500 mb-2">{selected.length}/32 seleccionados</p>
-              <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-2 mb-4">
-                {users.map((u) => (
-                  <button
-                    type="button"
-                    key={u.id}
-                    onClick={() => toggleSelected(u.id)}
-                    className={`flex items-center gap-2 px-3 py-1.5 rounded-lg border text-sm transition-colors ${selected.includes(u.id) ? 'bg-red-600/20 border-red-500 text-red-300' : 'bg-gray-800/60 border-gray-700 text-gray-400 hover:text-gray-200'}`}
-                  >
-                    <Avatar name={u.name} color={u.color} />
-                    {u.name}
+              <span className="text-sm">El Torneo Oficial ya finalizó — todavía no se generó el cuadro de playoffs.</span>
+              {isAdmin ? (
+                <>
+                  <span className="text-xs text-gray-700 max-w-md">Se arma solo, tomando la clasificación final del Torneo Oficial (mejor récord primero, vidas restantes como desempate) y sembrándola en un cuadro de eliminación directa.</span>
+                  {error && <p className="text-xs text-red-400">{error}</p>}
+                  <button type="button" onClick={handleGenerate} disabled={busy} className="flex items-center gap-1.5 bg-red-600 hover:bg-red-500 disabled:opacity-50 text-white text-sm font-semibold px-4 py-1.5 rounded-lg transition-colors">
+                    <Trophy className="w-4 h-4" /> Generar playoffs
                   </button>
-                ))}
-              </div>
-              <div className="flex items-center justify-between mb-2">
-                <h4 className="text-sm font-semibold text-gray-300">Dieciseisavos — emparejamientos</h4>
-                <button type="button" onClick={() => autoFillFirstRound(selected)} disabled={selected.length === 0} className="text-xs text-amber-400 hover:text-amber-300 disabled:opacity-40">Autocompletar en orden</button>
-              </div>
-              <div className="grid grid-cols-1 lg:grid-cols-2 gap-2 mb-4 max-h-80 overflow-y-auto pr-1">
-                {firstRound.map((pair, i) => (
-                  <div key={i} className="flex items-center gap-2 bg-gray-800/40 rounded-lg px-2 py-1.5">
-                    <span className="text-[10px] text-gray-600 font-mono-data w-5 shrink-0">{i + 1}</span>
-                    <select
-                      value={pair.p1Id || ''}
-                      onChange={(e) => setFirstRound((prev) => prev.map((p, j) => (j === i ? { ...p, p1Id: e.target.value || null } : p)))}
-                      className={`${inputClass} flex-1 min-w-0 text-xs`}
-                    >
-                      <option value="">BYE</option>
-                      {firstRoundSlotOptions(firstRound, i, 'p1Id', selected).map((id) => userMap[id]).filter(Boolean).map((u) => (
-                        <option key={u.id} value={u.id}>{u.name}</option>
-                      ))}
-                    </select>
-                    <span className="text-gray-600 text-xs">vs</span>
-                    <select
-                      value={pair.p2Id || ''}
-                      onChange={(e) => setFirstRound((prev) => prev.map((p, j) => (j === i ? { ...p, p2Id: e.target.value || null } : p)))}
-                      className={`${inputClass} flex-1 min-w-0 text-xs`}
-                    >
-                      <option value="">BYE</option>
-                      {firstRoundSlotOptions(firstRound, i, 'p2Id', selected).map((id) => userMap[id]).filter(Boolean).map((u) => (
-                        <option key={u.id} value={u.id}>{u.name}</option>
-                      ))}
-                    </select>
-                  </div>
-                ))}
-              </div>
+                </>
+              ) : (
+                <span className="text-xs text-gray-700">El administrador todavía no generó los playoffs.</span>
+              )}
             </>
+          ) : (
+            <span className="text-sm">Los playoffs se generan automáticamente en cuanto el administrador finalice el Torneo Oficial (sección "Torneo Oficial").</span>
           )}
-          {error && <p className="text-xs text-red-400 mb-2">{error}</p>}
-          <button
-            type="button"
-            onClick={handleCreate}
-            disabled={busy || selected.length < 1}
-            className="flex items-center justify-center gap-1.5 bg-red-600 hover:bg-red-500 disabled:opacity-50 disabled:cursor-not-allowed text-white text-sm font-semibold px-4 py-1.5 rounded-lg transition-colors"
-          >
-            <Trophy className="w-4 h-4" /> Crear cuadro ({selected.length} participantes)
-          </button>
         </Panel>
       </div>
     );
   }
 
-  const registered = (bracket.participantIds || []).length;
-  const byeCount = Math.max(0, 32 - registered);
-  const champion = rounds.length > 0 ? rounds[rounds.length - 1][0]?.winner : null;
-  const colHeight = 16 * BRACKET_SLOT_HEIGHT;
-  const canEditFirstRound = isAdmin && bracket.status === 'active';
+  const roundLabels = bracketRoundLabels(displayRounds.length);
+  const slotCount = displayRounds[0]?.length * 2 || 0;
+  const champion = displayRounds[displayRounds.length - 1][0]?.winner;
+  const colHeight = (slotCount / 2) * BRACKET_SLOT_HEIGHT;
 
   return (
     <div className="space-y-4">
       <Panel>
         <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-2">
           <div>
-            <h2 className="font-display text-xl font-bold text-white flex items-center gap-2 tracking-wide"><Trophy className="w-5 h-5 text-amber-400" /> {bracket.title.toUpperCase()}</h2>
+            <h2 className="font-display text-xl font-bold text-white flex items-center gap-2 tracking-wide"><Trophy className="w-5 h-5 text-amber-400" /> PLAYOFFS · CUADRO DE {slotCount}</h2>
             <p className="text-sm text-gray-500 mt-1">
-              Eliminación directa a partido único · {registered} inscritos, {byeCount} BYES.
+              Eliminación directa a partido único · sembrado con la clasificación final del Torneo Oficial.
               {isAdmin ? ' Toca un jugador para avanzarlo de ronda.' : ' Solo el administrador puede cargar resultados aquí.'}
-              {bracket.status === 'finished' ? ' · Cuadro finalizado' : ''}
             </p>
           </div>
-          <div className="flex flex-wrap items-center gap-2">
+          <div className="flex items-center gap-2">
             {champion && (
               <div className="flex items-center gap-2 bg-amber-500/10 border border-amber-500/30 rounded-lg px-3 py-2">
                 <Trophy className="w-5 h-5 text-amber-400" />
@@ -884,70 +725,29 @@ function Bracket32View({
                 </div>
               </div>
             )}
-            {isAdmin && bracket.status === 'active' && champion && (
-              <button type="button" onClick={handleFinish} disabled={busy} className="flex items-center gap-1.5 bg-emerald-700 hover:bg-emerald-600 disabled:opacity-40 text-white text-xs font-semibold px-3 py-1.5 rounded-lg transition-colors">
-                <Trophy className="w-3.5 h-3.5" /> Finalizar cuadro
-              </button>
-            )}
             {isAdmin && (
-              <button type="button" onClick={handleReset} disabled={busy} className="text-xs text-red-400 hover:text-red-300 disabled:opacity-50 px-2">Reiniciar</button>
+              <div className="flex items-center gap-2">
+                <button type="button" onClick={handleGenerate} disabled={busy} className="text-xs text-amber-400 hover:text-amber-300 disabled:opacity-50 px-2">Regenerar</button>
+                <button type="button" onClick={handleReset} disabled={busy} className="text-xs text-red-400 hover:text-red-300 disabled:opacity-50 px-2">Reiniciar</button>
+              </div>
             )}
           </div>
         </div>
         {error && <p className="text-xs text-red-400 mt-2">{error}</p>}
       </Panel>
 
-      {canEditFirstRound && (
-        <Panel>
-          <div className="flex items-center justify-between mb-3">
-            <h3 className="text-white font-semibold">Editar dieciseisavos</h3>
-            <button type="button" onClick={handleSaveFirstRound} disabled={busy} className="text-xs bg-amber-600 hover:bg-amber-500 disabled:opacity-40 text-white font-semibold px-3 py-1.5 rounded-lg transition-colors">
-              Guardar emparejamientos
-            </button>
-          </div>
-          <div className="grid grid-cols-1 lg:grid-cols-2 gap-2 max-h-64 overflow-y-auto pr-1">
-            {firstRound.map((pair, i) => (
-              <div key={i} className="flex items-center gap-2 bg-gray-800/40 rounded-lg px-2 py-1.5">
-                <span className="text-[10px] text-gray-600 font-mono-data w-5 shrink-0">{i + 1}</span>
-                <select
-                  value={pair.p1Id || ''}
-                  onChange={(e) => setFirstRound((prev) => prev.map((p, j) => (j === i ? { ...p, p1Id: e.target.value || null } : p)))}
-                  className={`${inputClass} flex-1 min-w-0 text-xs`}
-                >
-                  <option value="">BYE</option>
-                  {firstRoundSlotOptions(firstRound, i, 'p1Id', bracket.participantIds || []).map((id) => userMap[id]).filter(Boolean).map((u) => (
-                    <option key={u.id} value={u.id}>{u.name}</option>
-                  ))}
-                </select>
-                <span className="text-gray-600 text-xs">vs</span>
-                <select
-                  value={pair.p2Id || ''}
-                  onChange={(e) => setFirstRound((prev) => prev.map((p, j) => (j === i ? { ...p, p2Id: e.target.value || null } : p)))}
-                  className={`${inputClass} flex-1 min-w-0 text-xs`}
-                >
-                  <option value="">BYE</option>
-                  {firstRoundSlotOptions(firstRound, i, 'p2Id', bracket.participantIds || []).map((id) => userMap[id]).filter(Boolean).map((u) => (
-                    <option key={u.id} value={u.id}>{u.name}</option>
-                  ))}
-                </select>
-              </div>
-            ))}
-          </div>
-        </Panel>
-      )}
-
       <Panel className="overflow-x-auto">
         <div ref={containerRef} className="relative inline-flex gap-10 min-w-full" style={{ minHeight: colHeight + 40 }}>
           <BracketLines lines={lines} hoveredName={hoveredName} />
-          {rounds.map((round, ri) => (
+          {displayRounds.map((round, ri) => (
             <div key={ri} className="flex flex-col shrink-0" style={{ width: 192 }}>
               <div className="text-center mb-3">
-                <span className="text-xs font-bold uppercase tracking-wider font-mono-data" style={{ color: BRACKET_ROUND_COLORS[ri] }}>{BRACKET_ROUND_LABELS[ri]}</span>
+                <span className="text-xs font-bold uppercase tracking-wider font-mono-data" style={{ color: BRACKET_ROUND_COLORS[ri] }}>{roundLabels[ri]}</span>
               </div>
               <div className="flex flex-col justify-around flex-1" style={{ height: colHeight }}>
                 {round.map((m, mi) => (
                   <BracketMatchCard
-                    key={m.id || mi}
+                    key={m.id}
                     match={m}
                     roundIndex={ri}
                     matchIndex={mi}
@@ -956,7 +756,7 @@ function Bracket32View({
                     onHover={setHoveredName}
                     onSetWinner={handleSetWinner}
                     cardRef={setCardRef(`${ri}-${mi}`)}
-                    editable={isAdmin && bracket.status === 'active'}
+                    editable={isAdmin}
                   />
                 ))}
               </div>
@@ -2465,8 +2265,8 @@ export default function App() {
   const [rouletteHistory, setRouletteHistory] = useState([]);
   const [bracket, setBracket] = useState(null);
   const [loadingBracket, setLoadingBracket] = useState(true);
-  const [playoffBracket, setPlayoffBracket] = useState(null);
-  const [loadingPlayoffBracket, setLoadingPlayoffBracket] = useState(true);
+  const [playoff, setPlayoff] = useState(null);
+  const [loadingPlayoff, setLoadingPlayoff] = useState(true);
   const targetDate = useMemo(() => new Date(Date.now() + 1000 * 60 * 60 * 24 * 14), []);
   const countdown = useCountdown(targetDate);
 
@@ -2513,14 +2313,14 @@ export default function App() {
     }
   }
 
-  async function refreshPlayoffBracket() {
+  async function refreshPlayoff() {
     try {
-      const data = await api.getPlayoffBracket();
-      setPlayoffBracket(data);
+      const data = await api.getPlayoff();
+      setPlayoff(data);
     } catch {
-      // Si falla, se muestra como "aún no hay cuadro" — no es crítico.
+      // Si falla, se muestra como "aún no hay playoffs" — no es crítico.
     } finally {
-      setLoadingPlayoffBracket(false);
+      setLoadingPlayoff(false);
     }
   }
 
@@ -2533,7 +2333,7 @@ export default function App() {
     refreshUsers();
     refreshNews();
     refreshBracket();
-    refreshPlayoffBracket();
+    refreshPlayoff();
   }, []);
 
   useEffect(() => {
@@ -2638,29 +2438,19 @@ export default function App() {
     await refreshBracket();
   }
 
-  async function createPlayoffBracket(title, participantIds, firstRound) {
-    await api.createPlayoffBracket(title, participantIds, firstRound);
-    await refreshPlayoffBracket();
+  async function generatePlayoff() {
+    await api.generatePlayoff();
+    await refreshPlayoff();
   }
 
   async function playoffSetWinner(matchId, winnerId) {
     await api.playoffSetWinner(matchId, winnerId);
-    await refreshPlayoffBracket();
+    await refreshPlayoff();
   }
 
-  async function playoffSetFirstRound(matches) {
-    await api.playoffSetFirstRound(matches);
-    await refreshPlayoffBracket();
-  }
-
-  async function playoffFinish() {
-    await api.playoffFinish();
-    await refreshPlayoffBracket();
-  }
-
-  async function resetPlayoffBracket() {
-    await api.resetPlayoffBracket();
-    await refreshPlayoffBracket();
+  async function resetPlayoff() {
+    await api.resetPlayoff();
+    await refreshPlayoff();
   }
 
   function addRouletteResult(entry) {
@@ -2727,15 +2517,13 @@ export default function App() {
             {view === 'bracket' && <GroupStandingsView users={users} />}
             {view === 'playoffs' && (
               <Bracket32View
-                users={users}
                 role={role}
-                bracket={playoffBracket}
-                loading={loadingPlayoffBracket}
-                onCreate={createPlayoffBracket}
+                playoff={playoff}
+                loading={loadingPlayoff}
+                swissStatus={bracket ? bracket.status : null}
+                onGenerate={generatePlayoff}
                 onSetWinner={playoffSetWinner}
-                onSetFirstRound={playoffSetFirstRound}
-                onFinish={playoffFinish}
-                onReset={resetPlayoffBracket}
+                onReset={resetPlayoff}
               />
             )}
             {view === 'torneo-suizo' && (

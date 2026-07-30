@@ -55,14 +55,10 @@ export const api = {
   bracketFinish: () => request('/bracket', { method: 'PUT', body: { action: 'finish' }, auth: true }),
   resetBracket: () => request('/bracket', { method: 'DELETE', auth: true }),
 
-  getPlayoffBracket: () => request('/playoff-bracket'),
-  createPlayoffBracket: (title, participantIds, firstRound) => request('/playoff-bracket', { method: 'POST', body: { title, participantIds, firstRound }, auth: true }),
-  playoffSetWinner: (matchId, winnerId) => request('/playoff-bracket', { method: 'PUT', body: { action: 'setWinner', matchId, winnerId }, auth: true }),
-  playoffSetOpponent: (matchIndex, slot, playerId) => request('/playoff-bracket', { method: 'PUT', body: { action: 'setOpponent', matchIndex, slot, playerId }, auth: true }),
-  playoffSetFirstRound: (matches) => request('/playoff-bracket', { method: 'PUT', body: { action: 'setFirstRound', matches }, auth: true }),
-  playoffSwap: (matchIndexA, slotA, matchIndexB, slotB) => request('/playoff-bracket', { method: 'PUT', body: { action: 'swap', matchIndexA, slotA, matchIndexB, slotB }, auth: true }),
-  playoffFinish: () => request('/playoff-bracket', { method: 'PUT', body: { action: 'finish' }, auth: true }),
-  resetPlayoffBracket: () => request('/playoff-bracket', { method: 'DELETE', auth: true }),
+  getPlayoff: () => request('/playoff'),
+  generatePlayoff: (size) => request('/playoff', { method: 'POST', body: { size }, auth: true }),
+  playoffSetWinner: (matchId, winnerId) => request('/playoff', { method: 'PUT', body: { action: 'setWinner', matchId, winnerId }, auth: true }),
+  resetPlayoff: () => request('/playoff', { method: 'DELETE', auth: true }),
 };
 
 export function saveSession(session) {
