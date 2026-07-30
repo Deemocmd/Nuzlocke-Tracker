@@ -31,35 +31,6 @@ const ROULETTE_SEGMENTS = [
 const BRACKET_ROUND_LABELS = ['Dieciseisavos', 'Octavos', 'Cuartos', 'Semifinal', 'Final'];
 const BRACKET_ROUND_COLORS = ['#dc2626', '#ea580c', '#f59e0b', '#eab308', '#facc15'];
 
-function propagateBracketWinners(inputRounds) {
-  const rounds = inputRounds.map((r) => r.map((m) => ({ ...m })));
-  for (let r = 0; r < rounds.length - 1; r++) {
-    rounds[r].forEach((m, i) => {
-      const targetIndex = Math.floor(i / 2);
-      const slot = i % 2 === 0 ? 'p1' : 'p2';
-      rounds[r + 1][targetIndex][slot] = m.winner || undefined;
-    });
-    rounds[r + 1].forEach((m) => {
-      if (m.winner && m.winner !== m.p1 && m.winner !== m.p2) m.winner = null;
-    });
-  }
-  return rounds;
-}
-
-function buildBracket32(players) {
-  const counts = [16, 8, 4, 2, 1];
-  const rounds = counts.map((c) => Array.from({ length: c }, () => ({ p1: undefined, p2: undefined, winner: null })));
-  rounds[0] = rounds[0].map((_, i) => {
-    const p1 = players[i * 2] || null;
-    const p2 = players[i * 2 + 1] || null;
-    let winner = null;
-    if (p1 && !p2) winner = p1;
-    else if (!p1 && p2) winner = p2;
-    return { p1, p2, winner };
-  });
-  return propagateBracketWinners(rounds);
-}
-
 const STATUS_STYLES = {
   Vivo: 'bg-emerald-500/10 text-emerald-400 border-emerald-500/30',
   Muerto: 'bg-red-500/10 text-red-400 border-red-500/30',
@@ -551,8 +522,8 @@ function BracketMatchCard({ match, roundIndex, matchIndex, color, hoveredName, o
   const clickable = editable && Boolean(match.p1 && match.p2);
   return (
     <div ref={cardRef} className="flex flex-col gap-1 bg-gray-900/70 border rounded-xl p-1.5" style={{ borderColor: `${color}55`, width: 192 }}>
-      <BracketSlot player={match.p1} isWinner={Boolean(match.winner && match.p1 && match.winner.name === match.p1.name)} hoveredName={hoveredName} onHover={onHover} clickable={clickable} onClick={() => onSetWinner(roundIndex, matchIndex, match.p1)} />
-      <BracketSlot player={match.p2} isWinner={Boolean(match.winner && match.p2 && match.winner.name === match.p2.name)} hoveredName={hoveredName} onHover={onHover} clickable={clickable} onClick={() => onSetWinner(roundIndex, matchIndex, match.p2)} />
+      <BracketSlot player={match.p1} isWinner={Boolean(match.winner && match.p1 && match.winner.id === match.p1.id)} hoveredName={hoveredName} onHover={onHover} clickable={clickable} onClick={() => onSetWinner(match.id, match.p1?.id)} />
+      <BracketSlot player={match.p2} isWinner={Boolean(match.winner && match.p2 && match.winner.id === match.p2.id)} hoveredName={hoveredName} onHover={onHover} clickable={clickable} onClick={() => onSetWinner(match.id, match.p2?.id)} />
     </div>
   );
 }
@@ -592,40 +563,177 @@ function BracketLines({ lines, hoveredName }) {
   );
 }
 
-function Bracket32View({ users, role }) {
-  const isAdmin = role === 'Administrador';
-  const players = useMemo(() => {
-    const list = users.slice(0, 32).map((u) => ({ name: u.name, color: u.color }));
-    while (list.length < 32) list.push(null);
-    return list;
-  }, [users]);
-  const playersKey = players.map((p) => (p ? p.name : '·')).join('|');
+function buildFirstRoundPairings(participantIds) {
+  const slots = [...participantIds];
+  while (slots.length < 32) slots.push(null);
+  return Array.from({ length: 16 }, (_, i) => ({
+    p1Id: slots[i * 2] || null,
+    p2Id: slots[i * 2 + 1] || null,
+  }));
+}
 
-  const [rounds, setRounds] = useState(() => buildBracket32(players));
+function validateFirstRoundPairings(matches, participantIds = null) {
+  const allowed = participantIds ? new Set(participantIds) : null;
+  const seen = new Set();
+
+  for (let i = 0; i < matches.length; i++) {
+    const p1Id = matches[i]?.p1Id ?? null;
+    const p2Id = matches[i]?.p2Id ?? null;
+
+    if (p1Id && p2Id && p1Id === p2Id) {
+      return `El combate ${i + 1} no puede enfrentar al mismo jugador consigo mismo.`;
+    }
+
+    for (const id of [p1Id, p2Id]) {
+      if (!id) continue;
+      if (allowed && !allowed.has(id)) return 'Hay un jugador que no está en la lista de participantes.';
+      if (seen.has(id)) return 'Un jugador no puede aparecer en más de un combate de dieciseisavos.';
+      seen.add(id);
+    }
+  }
+
+  return null;
+}
+
+function firstRoundSlotOptions(firstRound, matchIndex, slotKey, participantIds) {
+  const used = new Set();
+  firstRound.forEach((pair) => {
+    if (pair.p1Id) used.add(pair.p1Id);
+    if (pair.p2Id) used.add(pair.p2Id);
+  });
+  const current = firstRound[matchIndex]?.[slotKey] || null;
+  return participantIds.filter((id) => !used.has(id) || id === current);
+}
+
+function resolvePlayoffSlot(playerId, roundIndex, userMap) {
+  if (playerId === null) return roundIndex === 0 ? null : undefined;
+  if (!playerId) return undefined;
+  const u = userMap[playerId];
+  return u ? { id: u.id, name: u.name, color: u.color } : null;
+}
+
+function playoffBracketToRounds(bracket, userMap) {
+  return (bracket.rounds || []).map((round, ri) =>
+    round.map((m) => ({
+      id: m.id,
+      p1: resolvePlayoffSlot(m.p1Id, ri, userMap),
+      p2: resolvePlayoffSlot(m.p2Id, ri, userMap),
+      winner: m.winnerId ? resolvePlayoffSlot(m.winnerId, ri, userMap) : null,
+    })),
+  );
+}
+
+function Bracket32View({
+  users, role, bracket, loading, onCreate, onSetWinner, onSetFirstRound, onFinish, onReset,
+}) {
+  const isAdmin = role === 'Administrador';
+  const userMap = useMemo(() => Object.fromEntries(users.map((u) => [u.id, u])), [users]);
+
+  const [selected, setSelected] = useState([]);
+  const [title, setTitle] = useState('Playoffs');
+  const [firstRound, setFirstRound] = useState(() => buildFirstRoundPairings([]));
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState('');
   const [hoveredName, setHoveredName] = useState(null);
   const [lines, setLines] = useState([]);
   const containerRef = useRef(null);
   const cardRefs = useRef({}).current;
 
-  useEffect(() => {
-    setRounds(buildBracket32(players));
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [playersKey]);
+  const rounds = useMemo(
+    () => (bracket ? playoffBracketToRounds(bracket, userMap) : []),
+    [bracket, userMap],
+  );
 
-  function setCardRef(key) { return (el) => { cardRefs[key] = el; }; }
-
-  function handleSetWinner(roundIndex, matchIndex, player) {
-    if (!isAdmin || !player) return;
-    setRounds((prev) => {
-      const copy = prev.map((r) => r.map((m) => ({ ...m })));
-      copy[roundIndex][matchIndex].winner = player;
-      return propagateBracketWinners(copy);
+  function toggleSelected(id) {
+    setSelected((prev) => {
+      if (prev.includes(id)) return prev.filter((x) => x !== id);
+      if (prev.length >= 32) return prev;
+      return [...prev, id];
     });
   }
 
+  function autoFillFirstRound(ids) {
+    setFirstRound(buildFirstRoundPairings(ids));
+  }
+
+  useEffect(() => {
+    if (!bracket) autoFillFirstRound(selected);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [selected.join('|')]);
+
+  async function handleCreate() {
+    if (selected.length < 1) { setError('Selecciona al menos 1 participante.'); return; }
+    const pairingError = validateFirstRoundPairings(firstRound, selected);
+    if (pairingError) { setError(pairingError); return; }
+    setBusy(true);
+    setError('');
+    try {
+      await onCreate(title, selected, firstRound);
+      setSelected([]);
+    } catch (err) {
+      setError(err.message || 'No se pudo crear el cuadro.');
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function handleSetWinner(matchId, winnerId) {
+    if (!isAdmin || !winnerId) return;
+    setError('');
+    try {
+      await onSetWinner(matchId, winnerId);
+    } catch (err) {
+      setError(err.message || 'No se pudo guardar el resultado.');
+    }
+  }
+
+  async function handleSaveFirstRound() {
+    const participantIds = bracket?.participantIds || [];
+    const pairingError = validateFirstRoundPairings(firstRound, participantIds);
+    if (pairingError) { setError(pairingError); return; }
+    setBusy(true);
+    setError('');
+    try {
+      await onSetFirstRound(firstRound);
+    } catch (err) {
+      setError(err.message || 'No se pudieron guardar los emparejamientos.');
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function handleFinish() {
+    setBusy(true);
+    setError('');
+    try {
+      await onFinish();
+    } catch (err) {
+      setError(err.message || 'No se pudo finalizar el cuadro.');
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function handleReset() {
+    if (!window.confirm('Esto borra el cuadro de playoffs por completo. ¿Continuar?')) return;
+    setBusy(true);
+    setError('');
+    try {
+      await onReset();
+      setSelected([]);
+      setFirstRound(buildFirstRoundPairings([]));
+    } catch (err) {
+      setError(err.message || 'No se pudo reiniciar el cuadro.');
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  function setCardRef(key) { return (el) => { cardRefs[key] = el; }; }
+
   useEffect(() => {
     function computeLines() {
-      if (!containerRef.current) return;
+      if (!containerRef.current || rounds.length === 0) return;
       const containerRect = containerRef.current.getBoundingClientRect();
       const next = [];
       for (let r = 0; r < rounds.length - 1; r++) {
@@ -654,43 +762,179 @@ function Bracket32View({ users, role }) {
     return () => window.removeEventListener('resize', computeLines);
   }, [rounds]);
 
-  const registered = players.filter(Boolean).length;
-  const byeCount = 32 - registered;
-  const champion = rounds[rounds.length - 1][0].winner;
-  const colHeight = 16 * BRACKET_SLOT_HEIGHT;
+  useEffect(() => {
+    if (bracket?.rounds?.[0]) {
+      setFirstRound(bracket.rounds[0].map((m) => ({ p1Id: m.p1Id ?? null, p2Id: m.p2Id ?? null })));
+    }
+  }, [bracket]);
 
-  if (registered === 0) {
+  if (loading) {
+    return <Panel><p className="text-sm text-gray-600">Cargando…</p></Panel>;
+  }
+
+  if (!bracket) {
+    if (!isAdmin) {
+      return (
+        <Panel className="flex flex-col items-center justify-center gap-2 py-14 text-gray-600 border-dashed">
+          <Trophy className="w-8 h-8" />
+          <span className="text-sm">El administrador todavía no configuró el cuadro de Playoffs.</span>
+        </Panel>
+      );
+    }
     return (
-      <Panel className="flex flex-col items-center justify-center gap-2 py-14 text-gray-600 border-dashed">
-        <Trophy className="w-8 h-8" />
-        <span className="text-sm">Todavía no hay participantes para generar el cuadro.</span>
-        <span className="text-xs text-gray-700">En cuanto un administrador añada jugadores, el bracket de 32 se genera solo (con BYES automáticos si faltan).</span>
-      </Panel>
+      <div className="space-y-4">
+        <Panel>
+          <h2 className="font-display text-xl font-bold text-white flex items-center gap-2 tracking-wide"><Trophy className="w-5 h-5 text-amber-400" /> PLAYOFFS · CUADRO DE 32</h2>
+          <p className="text-sm text-gray-500 mt-1">Elige hasta 32 participantes y asigna los emparejamientos de dieciseisavos. Los BYES se rellenan solos si faltan jugadores.</p>
+        </Panel>
+        <Panel>
+          <h3 className="text-white font-semibold mb-3">Configurar cuadro</h3>
+          <input value={title} onChange={(e) => setTitle(e.target.value)} placeholder="Título" className={`${inputClass} w-full mb-3`} />
+          {users.length === 0 ? (
+            <p className="text-sm text-gray-600">Todavía no hay participantes creados.</p>
+          ) : (
+            <>
+              <p className="text-xs text-gray-500 mb-2">{selected.length}/32 seleccionados</p>
+              <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-2 mb-4">
+                {users.map((u) => (
+                  <button
+                    type="button"
+                    key={u.id}
+                    onClick={() => toggleSelected(u.id)}
+                    className={`flex items-center gap-2 px-3 py-1.5 rounded-lg border text-sm transition-colors ${selected.includes(u.id) ? 'bg-red-600/20 border-red-500 text-red-300' : 'bg-gray-800/60 border-gray-700 text-gray-400 hover:text-gray-200'}`}
+                  >
+                    <Avatar name={u.name} color={u.color} />
+                    {u.name}
+                  </button>
+                ))}
+              </div>
+              <div className="flex items-center justify-between mb-2">
+                <h4 className="text-sm font-semibold text-gray-300">Dieciseisavos — emparejamientos</h4>
+                <button type="button" onClick={() => autoFillFirstRound(selected)} disabled={selected.length === 0} className="text-xs text-amber-400 hover:text-amber-300 disabled:opacity-40">Autocompletar en orden</button>
+              </div>
+              <div className="grid grid-cols-1 lg:grid-cols-2 gap-2 mb-4 max-h-80 overflow-y-auto pr-1">
+                {firstRound.map((pair, i) => (
+                  <div key={i} className="flex items-center gap-2 bg-gray-800/40 rounded-lg px-2 py-1.5">
+                    <span className="text-[10px] text-gray-600 font-mono-data w-5 shrink-0">{i + 1}</span>
+                    <select
+                      value={pair.p1Id || ''}
+                      onChange={(e) => setFirstRound((prev) => prev.map((p, j) => (j === i ? { ...p, p1Id: e.target.value || null } : p)))}
+                      className={`${inputClass} flex-1 min-w-0 text-xs`}
+                    >
+                      <option value="">BYE</option>
+                      {firstRoundSlotOptions(firstRound, i, 'p1Id', selected).map((id) => userMap[id]).filter(Boolean).map((u) => (
+                        <option key={u.id} value={u.id}>{u.name}</option>
+                      ))}
+                    </select>
+                    <span className="text-gray-600 text-xs">vs</span>
+                    <select
+                      value={pair.p2Id || ''}
+                      onChange={(e) => setFirstRound((prev) => prev.map((p, j) => (j === i ? { ...p, p2Id: e.target.value || null } : p)))}
+                      className={`${inputClass} flex-1 min-w-0 text-xs`}
+                    >
+                      <option value="">BYE</option>
+                      {firstRoundSlotOptions(firstRound, i, 'p2Id', selected).map((id) => userMap[id]).filter(Boolean).map((u) => (
+                        <option key={u.id} value={u.id}>{u.name}</option>
+                      ))}
+                    </select>
+                  </div>
+                ))}
+              </div>
+            </>
+          )}
+          {error && <p className="text-xs text-red-400 mb-2">{error}</p>}
+          <button
+            type="button"
+            onClick={handleCreate}
+            disabled={busy || selected.length < 1}
+            className="flex items-center justify-center gap-1.5 bg-red-600 hover:bg-red-500 disabled:opacity-50 disabled:cursor-not-allowed text-white text-sm font-semibold px-4 py-1.5 rounded-lg transition-colors"
+          >
+            <Trophy className="w-4 h-4" /> Crear cuadro ({selected.length} participantes)
+          </button>
+        </Panel>
+      </div>
     );
   }
+
+  const registered = (bracket.participantIds || []).length;
+  const byeCount = Math.max(0, 32 - registered);
+  const champion = rounds.length > 0 ? rounds[rounds.length - 1][0]?.winner : null;
+  const colHeight = 16 * BRACKET_SLOT_HEIGHT;
+  const canEditFirstRound = isAdmin && bracket.status === 'active';
 
   return (
     <div className="space-y-4">
       <Panel>
         <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-2">
           <div>
-            <h2 className="font-display text-xl font-bold text-white flex items-center gap-2 tracking-wide"><Trophy className="w-5 h-5 text-amber-400" /> PLAYOFFS · CUADRO DE 32</h2>
+            <h2 className="font-display text-xl font-bold text-white flex items-center gap-2 tracking-wide"><Trophy className="w-5 h-5 text-amber-400" /> {bracket.title.toUpperCase()}</h2>
             <p className="text-sm text-gray-500 mt-1">
-              Eliminación directa a partido único · {registered} inscritos, {byeCount} BYES automáticos.
+              Eliminación directa a partido único · {registered} inscritos, {byeCount} BYES.
               {isAdmin ? ' Toca un jugador para avanzarlo de ronda.' : ' Solo el administrador puede cargar resultados aquí.'}
+              {bracket.status === 'finished' ? ' · Cuadro finalizado' : ''}
             </p>
           </div>
-          {champion && (
-            <div className="flex items-center gap-2 bg-amber-500/10 border border-amber-500/30 rounded-lg px-3 py-2">
-              <Trophy className="w-5 h-5 text-amber-400" />
-              <div>
-                <div className="text-[10px] text-amber-500 uppercase tracking-wider">Campeón</div>
-                <div className="text-sm font-semibold text-amber-300">{champion.name}</div>
+          <div className="flex flex-wrap items-center gap-2">
+            {champion && (
+              <div className="flex items-center gap-2 bg-amber-500/10 border border-amber-500/30 rounded-lg px-3 py-2">
+                <Trophy className="w-5 h-5 text-amber-400" />
+                <div>
+                  <div className="text-[10px] text-amber-500 uppercase tracking-wider">Campeón</div>
+                  <div className="text-sm font-semibold text-amber-300">{champion.name}</div>
+                </div>
               </div>
-            </div>
-          )}
+            )}
+            {isAdmin && bracket.status === 'active' && champion && (
+              <button type="button" onClick={handleFinish} disabled={busy} className="flex items-center gap-1.5 bg-emerald-700 hover:bg-emerald-600 disabled:opacity-40 text-white text-xs font-semibold px-3 py-1.5 rounded-lg transition-colors">
+                <Trophy className="w-3.5 h-3.5" /> Finalizar cuadro
+              </button>
+            )}
+            {isAdmin && (
+              <button type="button" onClick={handleReset} disabled={busy} className="text-xs text-red-400 hover:text-red-300 disabled:opacity-50 px-2">Reiniciar</button>
+            )}
+          </div>
         </div>
+        {error && <p className="text-xs text-red-400 mt-2">{error}</p>}
       </Panel>
+
+      {canEditFirstRound && (
+        <Panel>
+          <div className="flex items-center justify-between mb-3">
+            <h3 className="text-white font-semibold">Editar dieciseisavos</h3>
+            <button type="button" onClick={handleSaveFirstRound} disabled={busy} className="text-xs bg-amber-600 hover:bg-amber-500 disabled:opacity-40 text-white font-semibold px-3 py-1.5 rounded-lg transition-colors">
+              Guardar emparejamientos
+            </button>
+          </div>
+          <div className="grid grid-cols-1 lg:grid-cols-2 gap-2 max-h-64 overflow-y-auto pr-1">
+            {firstRound.map((pair, i) => (
+              <div key={i} className="flex items-center gap-2 bg-gray-800/40 rounded-lg px-2 py-1.5">
+                <span className="text-[10px] text-gray-600 font-mono-data w-5 shrink-0">{i + 1}</span>
+                <select
+                  value={pair.p1Id || ''}
+                  onChange={(e) => setFirstRound((prev) => prev.map((p, j) => (j === i ? { ...p, p1Id: e.target.value || null } : p)))}
+                  className={`${inputClass} flex-1 min-w-0 text-xs`}
+                >
+                  <option value="">BYE</option>
+                  {firstRoundSlotOptions(firstRound, i, 'p1Id', bracket.participantIds || []).map((id) => userMap[id]).filter(Boolean).map((u) => (
+                    <option key={u.id} value={u.id}>{u.name}</option>
+                  ))}
+                </select>
+                <span className="text-gray-600 text-xs">vs</span>
+                <select
+                  value={pair.p2Id || ''}
+                  onChange={(e) => setFirstRound((prev) => prev.map((p, j) => (j === i ? { ...p, p2Id: e.target.value || null } : p)))}
+                  className={`${inputClass} flex-1 min-w-0 text-xs`}
+                >
+                  <option value="">BYE</option>
+                  {firstRoundSlotOptions(firstRound, i, 'p2Id', bracket.participantIds || []).map((id) => userMap[id]).filter(Boolean).map((u) => (
+                    <option key={u.id} value={u.id}>{u.name}</option>
+                  ))}
+                </select>
+              </div>
+            ))}
+          </div>
+        </Panel>
+      )}
 
       <Panel className="overflow-x-auto">
         <div ref={containerRef} className="relative inline-flex gap-10 min-w-full" style={{ minHeight: colHeight + 40 }}>
@@ -703,7 +947,7 @@ function Bracket32View({ users, role }) {
               <div className="flex flex-col justify-around flex-1" style={{ height: colHeight }}>
                 {round.map((m, mi) => (
                   <BracketMatchCard
-                    key={mi}
+                    key={m.id || mi}
                     match={m}
                     roundIndex={ri}
                     matchIndex={mi}
@@ -712,7 +956,7 @@ function Bracket32View({ users, role }) {
                     onHover={setHoveredName}
                     onSetWinner={handleSetWinner}
                     cardRef={setCardRef(`${ri}-${mi}`)}
-                    editable={isAdmin}
+                    editable={isAdmin && bracket.status === 'active'}
                   />
                 ))}
               </div>
@@ -2221,6 +2465,8 @@ export default function App() {
   const [rouletteHistory, setRouletteHistory] = useState([]);
   const [bracket, setBracket] = useState(null);
   const [loadingBracket, setLoadingBracket] = useState(true);
+  const [playoffBracket, setPlayoffBracket] = useState(null);
+  const [loadingPlayoffBracket, setLoadingPlayoffBracket] = useState(true);
   const targetDate = useMemo(() => new Date(Date.now() + 1000 * 60 * 60 * 24 * 14), []);
   const countdown = useCountdown(targetDate);
 
@@ -2267,6 +2513,17 @@ export default function App() {
     }
   }
 
+  async function refreshPlayoffBracket() {
+    try {
+      const data = await api.getPlayoffBracket();
+      setPlayoffBracket(data);
+    } catch {
+      // Si falla, se muestra como "aún no hay cuadro" — no es crítico.
+    } finally {
+      setLoadingPlayoffBracket(false);
+    }
+  }
+
   // Al montar: recupera la sesión guardada en este dispositivo (si existe) y
   // carga usuarios/noticias desde la base de datos vía Firestore.
   useEffect(() => {
@@ -2276,6 +2533,7 @@ export default function App() {
     refreshUsers();
     refreshNews();
     refreshBracket();
+    refreshPlayoffBracket();
   }, []);
 
   useEffect(() => {
@@ -2380,6 +2638,31 @@ export default function App() {
     await refreshBracket();
   }
 
+  async function createPlayoffBracket(title, participantIds, firstRound) {
+    await api.createPlayoffBracket(title, participantIds, firstRound);
+    await refreshPlayoffBracket();
+  }
+
+  async function playoffSetWinner(matchId, winnerId) {
+    await api.playoffSetWinner(matchId, winnerId);
+    await refreshPlayoffBracket();
+  }
+
+  async function playoffSetFirstRound(matches) {
+    await api.playoffSetFirstRound(matches);
+    await refreshPlayoffBracket();
+  }
+
+  async function playoffFinish() {
+    await api.playoffFinish();
+    await refreshPlayoffBracket();
+  }
+
+  async function resetPlayoffBracket() {
+    await api.resetPlayoffBracket();
+    await refreshPlayoffBracket();
+  }
+
   function addRouletteResult(entry) {
     setRouletteHistory((prev) => [entry, ...prev].slice(0, 8));
   }
@@ -2442,7 +2725,19 @@ export default function App() {
             {view === 'inicio' && <HomeView countdown={countdown} news={news} onNavigate={setView} users={users} />}
             {view === 'participantes' && <ParticipantsView users={users} />}
             {view === 'bracket' && <GroupStandingsView users={users} />}
-            {view === 'playoffs' && <Bracket32View users={users} role={role} />}
+            {view === 'playoffs' && (
+              <Bracket32View
+                users={users}
+                role={role}
+                bracket={playoffBracket}
+                loading={loadingPlayoffBracket}
+                onCreate={createPlayoffBracket}
+                onSetWinner={playoffSetWinner}
+                onSetFirstRound={playoffSetFirstRound}
+                onFinish={playoffFinish}
+                onReset={resetPlayoffBracket}
+              />
+            )}
             {view === 'torneo-suizo' && (
               <SwissBracketView
                 users={users}
