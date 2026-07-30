@@ -46,38 +46,6 @@ create table if not exists news_posts (
   created_at timestamptz not null default now()
 );
 
-create table if not exists wonder_trades (
-  id uuid primary key default gen_random_uuid(),
-  user_id uuid not null references users(id) on delete cascade,
-  route_entry_id uuid not null references route_entries(id) on delete cascade,
-  pokemon_name text,
-  route_name text,
-  received_pokemon text,
-  matched_with uuid,
-  status text not null default 'pending', -- pending | completed
-  created_at timestamptz not null default now(),
-  resolved_at timestamptz
-);
-create index if not exists wonder_trades_user_status_idx on wonder_trades(user_id, status);
-create index if not exists wonder_trades_status_idx on wonder_trades(status);
-
-create table if not exists direct_trades (
-  id uuid primary key default gen_random_uuid(),
-  from_user_id uuid not null references users(id) on delete cascade,
-  from_route_entry_id uuid not null references route_entries(id) on delete cascade,
-  offered_pokemon text,
-  offered_route_name text,
-  requested_pokemon text not null,
-  status text not null default 'pending', -- pending | completed
-  to_user_id uuid references users(id),
-  to_route_entry_id uuid references route_entries(id),
-  created_at timestamptz not null default now(),
-  resolved_at timestamptz
-);
-create index if not exists direct_trades_from_status_idx on direct_trades(from_user_id, status);
-create index if not exists direct_trades_to_status_idx on direct_trades(to_user_id, status);
-create index if not exists direct_trades_status_idx on direct_trades(status);
-
 -- El bracket suizo se guarda como una única fila (equivalente al doc "main"
 -- que tenías en Firestore).
 create table if not exists swiss_bracket (
@@ -112,8 +80,6 @@ create table if not exists playoff_bracket (
 alter table users enable row level security;
 alter table route_entries enable row level security;
 alter table news_posts enable row level security;
-alter table wonder_trades enable row level security;
-alter table direct_trades enable row level security;
 alter table swiss_bracket enable row level security;
 alter table playoff_bracket enable row level security;
 
@@ -217,99 +183,4 @@ begin
 end;
 $$;
 
--- Resuelve un emparejamiento de Intercambio Prodigioso: intercambia las
--- especies entre las dos filas de ruta y marca ambas ofertas como completadas.
-create or replace function resolve_wonder_trade(
-  p_my_user_id uuid,
-  p_my_route_id uuid,
-  p_candidate_trade_id uuid
-) returns jsonb
-language plpgsql
-as $$
-declare
-  v_candidate wonder_trades;
-  v_partner_route route_entries;
-  v_my_route route_entries;
-begin
-  select * into v_candidate from wonder_trades where id = p_candidate_trade_id and status = 'pending' for update;
-  if not found then
-    raise exception 'PARTNER_GONE';
-  end if;
 
-  select * into v_partner_route from route_entries where id = v_candidate.route_entry_id for update;
-  if not found then
-    raise exception 'PARTNER_GONE';
-  end if;
-
-  select * into v_my_route from route_entries where id = p_my_route_id for update;
-
-  update route_entries set pokemon_name = v_partner_route.pokemon_name,
-    nickname = '', level = null, nature = '', ability = '', item = '', notes = ''
-  where id = p_my_route_id;
-
-  update route_entries set pokemon_name = v_my_route.pokemon_name,
-    nickname = '', level = null, nature = '', ability = '', item = '', notes = ''
-  where id = v_candidate.route_entry_id;
-
-  insert into wonder_trades (user_id, route_entry_id, pokemon_name, route_name, received_pokemon, matched_with, status, resolved_at)
-  values (p_my_user_id, p_my_route_id, v_my_route.pokemon_name, v_my_route.route, v_partner_route.pokemon_name, v_candidate.user_id, 'completed', now());
-
-  update wonder_trades set
-    received_pokemon = v_my_route.pokemon_name,
-    matched_with = p_my_user_id,
-    status = 'completed',
-    resolved_at = now()
-  where id = p_candidate_trade_id;
-
-  return jsonb_build_object('received', v_partner_route.pokemon_name, 'offered', v_my_route.pokemon_name);
-end;
-$$;
-
--- Acepta una oferta de trueque directo: valida especie pedida, intercambia
--- las especies entre las dos filas y cierra la oferta.
-create or replace function accept_direct_trade(
-  p_offer_id uuid,
-  p_my_user_id uuid,
-  p_my_route_id uuid
-) returns jsonb
-language plpgsql
-as $$
-declare
-  v_offer direct_trades;
-  v_my_route route_entries;
-  v_from_route route_entries;
-begin
-  select * into v_offer from direct_trades where id = p_offer_id and status = 'pending' for update;
-  if not found then raise exception 'OFFER_GONE'; end if;
-  if v_offer.from_user_id = p_my_user_id then raise exception 'OWN_OFFER'; end if;
-
-  select * into v_my_route from route_entries where id = p_my_route_id for update;
-  if not found or v_my_route.user_id <> p_my_user_id then raise exception 'NOT_MINE'; end if;
-  if v_my_route.status <> 'Vivo' or v_my_route.pokemon_name is null or trim(v_my_route.pokemon_name) = '' then
-    raise exception 'NOT_ALIVE';
-  end if;
-  if lower(trim(v_my_route.pokemon_name)) <> lower(trim(v_offer.requested_pokemon)) then
-    raise exception 'SPECIES_MISMATCH';
-  end if;
-
-  select * into v_from_route from route_entries where id = v_offer.from_route_entry_id for update;
-  if not found then raise exception 'OFFER_GONE'; end if;
-
-  update route_entries set pokemon_name = v_my_route.pokemon_name,
-    nickname = '', level = null, nature = '', ability = '', item = '', notes = ''
-  where id = v_from_route.id;
-
-  update route_entries set pokemon_name = v_offer.offered_pokemon,
-    nickname = '', level = null, nature = '', ability = '', item = '', notes = ''
-  where id = v_my_route.id;
-
-  update direct_trades set
-    status = 'completed',
-    to_user_id = p_my_user_id,
-    to_route_entry_id = p_my_route_id,
-    resolved_at = now()
-  where id = p_offer_id;
-
-  return jsonb_build_object('received', v_offer.offered_pokemon, 'given', v_my_route.pokemon_name);
-end;
-$$;

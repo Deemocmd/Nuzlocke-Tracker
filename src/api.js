@@ -38,15 +38,6 @@ export const api = {
   addCustomRoute: (route) => request('/custom-route', { method: 'POST', body: { route }, auth: true }),
   deleteCustomRoute: (id) => request(`/custom-route?id=${encodeURIComponent(id)}`, { method: 'DELETE', auth: true }),
 
-  getWonderTrade: () => request('/wonder-trade', { auth: true }),
-  offerWonderTrade: (routeEntryId) => request('/wonder-trade', { method: 'POST', body: { routeEntryId }, auth: true }),
-  cancelWonderTrade: () => request('/wonder-trade', { method: 'DELETE', auth: true }),
-
-  getDirectTrades: () => request('/direct-trade', { auth: true }),
-  offerDirectTrade: (routeEntryId, requestedPokemon) => request('/direct-trade', { method: 'POST', body: { routeEntryId, requestedPokemon }, auth: true }),
-  acceptDirectTrade: (offerId, routeEntryId) => request('/direct-trade', { method: 'PUT', body: { offerId, routeEntryId }, auth: true }),
-  cancelDirectTrade: (id) => request(`/direct-trade?id=${encodeURIComponent(id)}`, { method: 'DELETE', auth: true }),
-
   getBracket: () => request('/bracket'),
   createBracket: (title, participantIds) => request('/bracket', { method: 'POST', body: { title, participantIds }, auth: true }),
   bracketSetWinner: (matchId, winnerId) => request('/bracket', { method: 'PUT', body: { action: 'setWinner', matchId, winnerId }, auth: true }),

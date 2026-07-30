@@ -106,7 +106,6 @@ api/login.js             POST — login de admin o de jugador
 api/users.js             GET/POST/DELETE — participantes y sus fichas
 api/route-entry.js       PUT — guarda una fila de ruta/Pokémon
 api/custom-route.js      POST/DELETE — filas extra que cada participante se agrega solo
-api/wonder-trade.js      GET/POST/DELETE — intercambios prodigiosos
 api/bracket.js           GET/POST/PUT/DELETE — Torneo Oficial (bracket suizo)
 api/news.js              GET/POST — noticias del torneo
 src/api.js               Cliente fetch del frontend hacia /api
@@ -123,41 +122,11 @@ src/usePokemonSprite.js  Busca el sprite de cualquier Pokémon por nombre en la 
   `notes`, y opcionalmente `isCustom: true` si la agregó el propio
   participante (en vez de venir de las 62 rutas fijas de Hoenn).
 - **`newsPosts`** (colección): `title`, `excerpt`, `createdAt`.
-- **`wonderTrades`** (colección): historial y cola de los Intercambios
-  prodigiosos — `userId`, `routeEntryId`, `pokemonName`, `status`
-  (`pending`/`completed`), `receivedPokemon`, `matchedWith`, `createdAt`,
-  `resolvedAt`.
-- **`directTrades`** (colección): tablón de Trueques directos — `fromUserId`,
-  `fromRouteEntryId`, `offeredPokemon`, `offeredRouteName`,
-  `requestedPokemon` (especie exacta que pide a cambio), `status`
-  (`pending`/`completed`), `toUserId`, `toRouteEntryId`, `createdAt`,
-  `resolvedAt`.
 - **`swissBracket`** (colección, un único documento `main`): el Torneo
   Oficial — `title`, `status` (`active`/`finished`), `participantIds`,
   `rounds` (array de fechas, cada una con sus combates).
 
 ## Funcionalidades nuevas
-
-### Intercambios prodigiosos (pestaña "Intercambios", solo para jugadores)
-
-Cada participante elige uno de sus Pokémon **vivos** y lo ofrece al fondo
-compartido. Si en ese momento hay otra oferta pendiente de **otro**
-participante, el sistema los empareja al instante y ambos reciben la
-especie del otro en la misma fila que ofrecieron (apodo, nivel, naturaleza,
-etc. de esa fila se reinician porque pasa a ser un individuo distinto). Si
-nadie está esperando, la oferta queda en cola hasta que alguien mande la
-suya — se puede cancelar en cualquier momento antes de que se empareje.
-
-### Trueque directo (dentro de la pestaña "Intercambios", junto al Intercambio prodigioso)
-
-A diferencia del Intercambio prodigioso (emparejamiento al azar), aquí cada
-participante publica una oferta indicando **qué Pokémon da y qué especie
-exacta pide a cambio**. La oferta queda visible en un tablón para el resto
-de participantes; solo puede cancelarla quien la publicó, y solo puede
-aceptarla alguien que tenga esa especie exacta viva en una de sus filas —
-el trueque se resuelve al instante en cuanto alguien acepta (apodo, nivel,
-naturaleza, etc. de la fila involucrada se reinician, igual que en el
-Intercambio prodigioso, porque pasa a ser un individuo distinto).
 
 ### Filas propias en la ficha Nuzlocke ("Mi Perfil")
 

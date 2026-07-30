@@ -38,34 +38,3 @@ export function newsToJson(row) {
   return { id: row.id, title: row.title, excerpt: row.excerpt, createdAt: row.created_at };
 }
 
-export function wonderTradeToJson(row) {
-  return {
-    id: row.id,
-    userId: row.user_id,
-    routeEntryId: row.route_entry_id,
-    pokemonName: row.pokemon_name,
-    routeName: row.route_name,
-    receivedPokemon: row.received_pokemon,
-    matchedWith: row.matched_with,
-    status: row.status,
-    createdAt: row.created_at,
-    resolvedAt: row.resolved_at,
-  };
-}
-
-export function directTradeToJson(row, extra = {}) {
-  return {
-    id: row.id,
-    fromUserId: row.from_user_id,
-    fromRouteEntryId: row.from_route_entry_id,
-    offeredPokemon: row.offered_pokemon,
-    offeredRouteName: row.offered_route_name,
-    requestedPokemon: row.requested_pokemon,
-    status: row.status,
-    toUserId: row.to_user_id,
-    toRouteEntryId: row.to_route_entry_id,
-    createdAt: row.created_at,
-    resolvedAt: row.resolved_at,
-    ...extra,
-  };
-}
