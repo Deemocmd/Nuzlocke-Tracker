@@ -497,7 +497,7 @@ function GroupStandingsView({ users }) {
 
 const BRACKET_SLOT_HEIGHT = 88;
 
-function BracketSlot({ player, isWinner, hoveredName, onHover, onClick, clickable }) {
+function BracketSlot({ player, isWinner, hoveredName, onHover, isMoveSource, dimmed }) {
   if (player === undefined) {
     return <div className="flex items-center px-2.5 py-2 rounded-lg border border-dashed border-gray-800 text-xs text-gray-700 italic h-[34px]">Por determinar</div>;
   }
@@ -506,29 +506,63 @@ function BracketSlot({ player, isWinner, hoveredName, onHover, onClick, clickabl
   }
   const highlighted = hoveredName === player.name;
   return (
-    <button
-      type="button"
-      disabled={!clickable}
-      onClick={onClick}
+    <div
       onMouseEnter={() => onHover(player.name)}
       onMouseLeave={() => onHover(null)}
       className={`w-full flex items-center gap-2 px-2.5 py-2 rounded-lg border text-sm font-mono-data transition-all h-[34px] ${
         isWinner ? 'border-amber-400 bg-amber-500/10 text-amber-300 font-semibold' : 'border-gray-700 bg-gray-800/60 text-gray-300'
-      } ${clickable ? 'hover:border-gray-500 cursor-pointer' : 'cursor-default'} ${highlighted ? 'ring-2 ring-amber-400/70' : ''}`}
+      } ${highlighted ? 'ring-2 ring-amber-400/70' : ''} ${isMoveSource ? 'ring-2 ring-sky-400' : ''} ${dimmed ? 'opacity-40' : ''}`}
     >
       <Avatar name={player.name} color={player.color} />
       <span className="truncate">{player.name}</span>
       {isWinner && <Trophy className="w-3.5 h-3.5 text-amber-400 ml-auto shrink-0" />}
-    </button>
+    </div>
   );
 }
 
-function BracketMatchCard({ match, roundIndex, matchIndex, color, hoveredName, onHover, onSetWinner, cardRef, editable }) {
-  const clickable = editable && Boolean(match.p1 && match.p2);
+function BracketMatchCard({ match, roundIndex, matchIndex, color, hoveredName, onHover, onSetWinner, onMoveClick, moveSource, cardRef, editable }) {
+  const clickableResult = editable && Boolean(match.p1 && match.p2);
   return (
     <div ref={cardRef} className="flex flex-col gap-1 bg-gray-900/70 border rounded-xl p-1.5" style={{ borderColor: `${color}55`, width: 192 }}>
-      <BracketSlot player={match.p1} isWinner={Boolean(match.winner && match.p1 && match.winner.name === match.p1.name)} hoveredName={hoveredName} onHover={onHover} clickable={clickable} onClick={() => onSetWinner(roundIndex, matchIndex, match.p1)} />
-      <BracketSlot player={match.p2} isWinner={Boolean(match.winner && match.p2 && match.winner.name === match.p2.name)} hoveredName={hoveredName} onHover={onHover} clickable={clickable} onClick={() => onSetWinner(roundIndex, matchIndex, match.p2)} />
+      {['p1', 'p2'].map((slot) => {
+        const player = match[slot];
+        const playerId = player?.id ?? null;
+        const isSrc = moveSource && moveSource.matchId === match.id && moveSource.slot === slot;
+        return (
+          <div key={slot} className="flex items-center gap-1">
+            <div className="flex-1">
+              <BracketSlot
+                player={player}
+                isWinner={Boolean(match.winner && player && match.winner.id === player.id)}
+                hoveredName={hoveredName}
+                onHover={onHover}
+                isMoveSource={isSrc}
+              />
+            </div>
+            {editable && (
+              <div className="flex flex-col gap-0.5 shrink-0">
+                <button
+                  type="button"
+                  title="Marcar como ganador"
+                  disabled={!clickableResult}
+                  onClick={() => onSetWinner(roundIndex, matchIndex, player)}
+                  className={`p-1 rounded border ${clickableResult ? 'border-gray-700 text-gray-400 hover:text-amber-400 hover:border-amber-500' : 'border-gray-900 text-gray-800 cursor-not-allowed'}`}
+                >
+                  <Trophy className="w-3 h-3" />
+                </button>
+                <button
+                  type="button"
+                  title="Mover a otro combate"
+                  onClick={() => onMoveClick(match.id, slot, playerId)}
+                  className={`p-1 rounded border ${isSrc ? 'border-sky-400 text-sky-300' : 'border-gray-700 text-gray-400 hover:text-sky-400 hover:border-sky-500'}`}
+                >
+                  <Move className="w-3 h-3" />
+                </button>
+              </div>
+            )}
+          </div>
+        );
+      })}
     </div>
   );
 }
@@ -568,14 +602,21 @@ function BracketLines({ lines, hoveredName }) {
   );
 }
 
-function Bracket32View({ role, playoff, loading, swissStatus, onGenerate, onSetWinner, onReset }) {
+function Bracket32View({ users, role, playoff, loading, onCreate, onSetWinner, onSwap, onReset }) {
   const isAdmin = role === 'Administrador';
+  const [selected, setSelected] = useState([]);
+  const [title, setTitle] = useState('Playoffs');
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState('');
   const [hoveredName, setHoveredName] = useState(null);
   const [lines, setLines] = useState([]);
+  const [moveSource, setMoveSource] = useState(null);
   const containerRef = useRef(null);
   const cardRefs = useRef({}).current;
+
+  function toggleSelected(id) {
+    setSelected((prev) => (prev.includes(id) ? prev.filter((x) => x !== id) : [...prev, id]));
+  }
 
   const participantMap = useMemo(
     () => Object.fromEntries((playoff?.participants || []).map((p) => [p.id, p])),
@@ -599,13 +640,15 @@ function Bracket32View({ role, playoff, loading, swissStatus, onGenerate, onSetW
 
   function setCardRef(key) { return (el) => { cardRefs[key] = el; }; }
 
-  async function handleGenerate() {
+  async function handleCreate() {
+    if (selected.length < 2) { setError('Selecciona al menos 2 participantes.'); return; }
     setBusy(true);
     setError('');
     try {
-      await onGenerate();
+      await onCreate(title, selected);
+      setSelected([]);
     } catch (err) {
-      setError(err.message || 'No se pudo generar el cuadro de playoffs.');
+      setError(err.message || 'No se pudo crear el cuadro de playoffs.');
     } finally {
       setBusy(false);
     }
@@ -617,6 +660,7 @@ function Bracket32View({ role, playoff, loading, swissStatus, onGenerate, onSetW
     setError('');
     try {
       await onReset();
+      setSelected([]);
     } catch (err) {
       setError(err.message || 'No se pudo reiniciar los playoffs.');
     } finally {
@@ -633,6 +677,20 @@ function Bracket32View({ role, playoff, loading, swissStatus, onGenerate, onSetW
     } catch (err) {
       setError(err.message || 'No se pudo guardar el resultado.');
     }
+  }
+
+  function handleMoveClick(matchId, slot, playerId) {
+    if (!moveSource) {
+      setMoveSource({ matchId, slot, playerId });
+      return;
+    }
+    if (moveSource.matchId === matchId && moveSource.slot === slot) {
+      setMoveSource(null);
+      return;
+    }
+    const src = moveSource;
+    setMoveSource(null);
+    onSwap(src.matchId, src.slot, matchId, slot).catch((err) => setError(err.message || 'No se pudo mover al jugador.'));
   }
 
   useEffect(() => {
@@ -671,28 +729,49 @@ function Bracket32View({ role, playoff, loading, swissStatus, onGenerate, onSetW
   }
 
   if (!playoff) {
+    if (!isAdmin) {
+      return (
+        <Panel className="flex flex-col items-center justify-center gap-2 py-14 text-gray-600 border-dashed">
+          <Trophy className="w-8 h-8" />
+          <span className="text-sm">El administrador todavía no inició los Playoffs.</span>
+        </Panel>
+      );
+    }
     return (
       <div className="space-y-4">
-        <Panel className="flex flex-col items-center justify-center gap-3 py-14 text-gray-600 border-dashed text-center">
-          <Trophy className="w-8 h-8" />
-          {swissStatus === 'finished' ? (
-            <>
-              <span className="text-sm">El Torneo Oficial ya finalizó — todavía no se generó el cuadro de playoffs.</span>
-              {isAdmin ? (
-                <>
-                  <span className="text-xs text-gray-700 max-w-md">Se arma solo, tomando la clasificación final del Torneo Oficial (mejor récord primero, vidas restantes como desempate) y sembrándola en un cuadro de eliminación directa.</span>
-                  {error && <p className="text-xs text-red-400">{error}</p>}
-                  <button type="button" onClick={handleGenerate} disabled={busy} className="flex items-center gap-1.5 bg-red-600 hover:bg-red-500 disabled:opacity-50 text-white text-sm font-semibold px-4 py-1.5 rounded-lg transition-colors">
-                    <Trophy className="w-4 h-4" /> Generar playoffs
-                  </button>
-                </>
-              ) : (
-                <span className="text-xs text-gray-700">El administrador todavía no generó los playoffs.</span>
-              )}
-            </>
+        <Panel>
+          <h2 className="font-display text-xl font-bold text-white flex items-center gap-2 tracking-wide"><Trophy className="w-5 h-5 text-amber-400" /> PLAYOFFS · ELIMINACIÓN DIRECTA</h2>
+          <p className="text-sm text-gray-500 mt-1">Elige quiénes participan en el cuadro de eliminación directa. Después podés reorganizar los emparejamientos manualmente con la flecha de mover.</p>
+        </Panel>
+        <Panel>
+          <h3 className="text-white font-semibold mb-3">Configurar playoffs</h3>
+          <input value={title} onChange={(e) => setTitle(e.target.value)} placeholder="Título del cuadro" className={`${inputClass} w-full mb-3`} />
+          {users.length === 0 ? (
+            <p className="text-sm text-gray-600">Todavía no hay participantes creados.</p>
           ) : (
-            <span className="text-sm">Los playoffs se generan automáticamente en cuanto el administrador finalice el Torneo Oficial (sección "Torneo Oficial").</span>
+            <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-2 mb-3">
+              {users.map((u) => (
+                <button
+                  type="button"
+                  key={u.id}
+                  onClick={() => toggleSelected(u.id)}
+                  className={`flex items-center gap-2 px-3 py-1.5 rounded-lg border text-sm transition-colors ${selected.includes(u.id) ? 'bg-red-600/20 border-red-500 text-red-300' : 'bg-gray-800/60 border-gray-700 text-gray-400 hover:text-gray-200'}`}
+                >
+                  <Avatar name={u.name} color={u.color} />
+                  {u.name}
+                </button>
+              ))}
+            </div>
           )}
+          {error && <p className="text-xs text-red-400 mb-2">{error}</p>}
+          <button
+            type="button"
+            onClick={handleCreate}
+            disabled={busy || selected.length < 2}
+            className="flex items-center justify-center gap-1.5 bg-red-600 hover:bg-red-500 disabled:opacity-50 disabled:cursor-not-allowed text-white text-sm font-semibold px-4 py-1.5 rounded-lg transition-colors"
+          >
+            <Trophy className="w-4 h-4" /> Iniciar playoffs ({selected.length} seleccionados)
+          </button>
         </Panel>
       </div>
     );
@@ -708,10 +787,10 @@ function Bracket32View({ role, playoff, loading, swissStatus, onGenerate, onSetW
       <Panel>
         <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-2">
           <div>
-            <h2 className="font-display text-xl font-bold text-white flex items-center gap-2 tracking-wide"><Trophy className="w-5 h-5 text-amber-400" /> PLAYOFFS · CUADRO DE {slotCount}</h2>
+            <h2 className="font-display text-xl font-bold text-white flex items-center gap-2 tracking-wide"><Trophy className="w-5 h-5 text-amber-400" /> {(playoff.title || 'PLAYOFFS').toUpperCase()} · CUADRO DE {slotCount}</h2>
             <p className="text-sm text-gray-500 mt-1">
-              Eliminación directa a partido único · sembrado con la clasificación final del Torneo Oficial.
-              {isAdmin ? ' Toca un jugador para avanzarlo de ronda.' : ' Solo el administrador puede cargar resultados aquí.'}
+              Eliminación directa a partido único.
+              {isAdmin ? ' Usa el trofeo para marcar ganadores y la flecha para mover jugadores entre combates.' : ' Solo el administrador puede cargar resultados aquí.'}
             </p>
           </div>
           <div className="flex items-center gap-2">
@@ -726,12 +805,16 @@ function Bracket32View({ role, playoff, loading, swissStatus, onGenerate, onSetW
             )}
             {isAdmin && (
               <div className="flex items-center gap-2">
-                <button type="button" onClick={handleGenerate} disabled={busy} className="text-xs text-amber-400 hover:text-amber-300 disabled:opacity-50 px-2">Regenerar</button>
                 <button type="button" onClick={handleReset} disabled={busy} className="text-xs text-red-400 hover:text-red-300 disabled:opacity-50 px-2">Reiniciar</button>
               </div>
             )}
           </div>
         </div>
+        {isAdmin && playoff.status === 'active' && (
+          <p className="text-xs text-gray-600 mt-3">
+            Usa el trofeo <Trophy className="w-3 h-3 inline text-gray-500" /> para marcar al ganador de un combate, y la flecha <Move className="w-3 h-3 inline text-gray-500" /> para mover a un jugador a cualquier otro puesto: tócala una vez sobre el jugador de origen, y otra vez sobre el puesto destino.
+          </p>
+        )}
         {error && <p className="text-xs text-red-400 mt-2">{error}</p>}
       </Panel>
 
@@ -754,8 +837,10 @@ function Bracket32View({ role, playoff, loading, swissStatus, onGenerate, onSetW
                     hoveredName={hoveredName}
                     onHover={setHoveredName}
                     onSetWinner={handleSetWinner}
+                    onMoveClick={handleMoveClick}
+                    moveSource={moveSource}
                     cardRef={setCardRef(`${ri}-${mi}`)}
-                    editable={isAdmin}
+                    editable={isAdmin && playoff.status === 'active'}
                   />
                 ))}
               </div>
@@ -852,7 +937,7 @@ function SwissMatchCard({ match, userMap, editable, onSetWinner, moveSource, onM
   );
 }
 
-function SwissBracketView({ users, role, bracket, loading, onCreate, onSetWinner, onSwap, onAdvanceRound, onFinish, onReset, playoff, onGeneratePlayoff, onGoToPlayoffs }) {
+function SwissBracketView({ users, role, bracket, loading, onCreate, onSetWinner, onSwap, onAdvanceRound, onFinish, onReset }) {
   const isAdmin = role === 'Administrador';
   const userMap = useMemo(() => Object.fromEntries(users.map((u) => [u.id, u])), [users]);
 
@@ -936,19 +1021,6 @@ function SwissBracketView({ users, role, bracket, loading, onCreate, onSetWinner
       setSelected([]);
     } catch (err) {
       setError(err.message || 'No se pudo reiniciar el torneo.');
-    } finally {
-      setBusy(false);
-    }
-  }
-
-  async function handleGeneratePlayoffs() {
-    setBusy(true);
-    setError('');
-    try {
-      await onGeneratePlayoff();
-      if (onGoToPlayoffs) onGoToPlayoffs();
-    } catch (err) {
-      setError(err.message || 'No se pudo generar el cuadro de playoffs.');
     } finally {
       setBusy(false);
     }
@@ -1125,23 +1197,6 @@ function SwissBracketView({ users, role, bracket, loading, onCreate, onSetWinner
               </div>
             ))}
           </div>
-          {isAdmin && (
-            <div className="mt-4 pt-4 border-t border-amber-900/40 flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3">
-              <p className="text-xs text-gray-500 max-w-md">
-                {playoff
-                  ? 'Ya se generó el cuadro de playoffs a partir de esta clasificación. Podés volver a generarlo si cambiaste algún resultado.'
-                  : 'Con esta clasificación final ya se puede armar el cuadro de eliminación directa (Playoffs): se siembra solo, mejor récord primero y vidas restantes como desempate.'}
-              </p>
-              <button
-                type="button"
-                onClick={handleGeneratePlayoffs}
-                disabled={busy}
-                className="flex items-center justify-center gap-1.5 bg-amber-600 hover:bg-amber-500 disabled:opacity-50 text-white text-xs font-semibold px-4 py-2 rounded-lg transition-colors shrink-0"
-              >
-                <Trophy className="w-3.5 h-3.5" /> {playoff ? 'Regenerar playoffs' : 'Generar playoffs con esta clasificación'}
-              </button>
-            </div>
-          )}
         </Panel>
       )}
     </div>
@@ -2068,13 +2123,18 @@ export default function App() {
     await refreshBracket();
   }
 
-  async function generatePlayoff() {
-    await api.generatePlayoff();
+  async function createPlayoff(title, participantIds) {
+    await api.createPlayoff(title, participantIds);
     await refreshPlayoff();
   }
 
   async function playoffSetWinner(matchId, winnerId) {
     await api.playoffSetWinner(matchId, winnerId);
+    await refreshPlayoff();
+  }
+
+  async function playoffSwap(matchIdA, slotA, matchIdB, slotB) {
+    await api.playoffSwap(matchIdA, slotA, matchIdB, slotB);
     await refreshPlayoff();
   }
 
@@ -2147,12 +2207,13 @@ export default function App() {
             {view === 'bracket' && <GroupStandingsView users={users} />}
             {view === 'playoffs' && (
               <Bracket32View
+                users={users}
                 role={role}
                 playoff={playoff}
                 loading={loadingPlayoff}
-                swissStatus={bracket ? bracket.status : null}
-                onGenerate={generatePlayoff}
+                onCreate={createPlayoff}
                 onSetWinner={playoffSetWinner}
+                onSwap={playoffSwap}
                 onReset={resetPlayoff}
               />
             )}
@@ -2168,9 +2229,6 @@ export default function App() {
                 onAdvanceRound={bracketAdvanceRound}
                 onFinish={bracketFinish}
                 onReset={resetBracket}
-                playoff={playoff}
-                onGeneratePlayoff={generatePlayoff}
-                onGoToPlayoffs={() => setView('playoffs')}
               />
             )}
             {view === 'ruleta' && role === 'Administrador' && (

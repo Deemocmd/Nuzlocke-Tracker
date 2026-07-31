@@ -3,10 +3,10 @@ import { requireAdmin, allowCors } from './_lib/auth.js';
 import { randomUUID } from 'crypto';
 
 // --------------------------------------------------------------------------
-// Playoffs (eliminación directa a partido único). Se generan a partir de la
-// clasificación final del Torneo Oficial (bracket suizo): mejor récord
-// primero, desempatando por vidas restantes. Se guarda como una única fila
-// ("main") en la tabla playoff_bracket, igual que el bracket suizo.
+// Playoffs (eliminación directa a partido único). Independiente del Torneo
+// Oficial: el administrador elige manualmente quiénes participan y puede
+// reorganizar los emparejamientos con la acción "swap". Se guarda como una
+// única fila ("main") en la tabla playoff_bracket.
 // --------------------------------------------------------------------------
 
 const DOC_ID = 'main';
@@ -110,65 +110,35 @@ export default async function handler(req, res) {
 
   if (req.method === 'POST') {
     try {
-      const { data: swiss, error: swissErr } = await supabase.from('swiss_bracket').select('*').eq('id', 'main').maybeSingle();
-      if (swissErr) throw swissErr;
-      if (!swiss) {
-        res.status(400).json({ error: 'Todavía no hay un Torneo Oficial creado.' });
+      const { title, participantIds } = req.body || {};
+      const ids = Array.isArray(participantIds) ? participantIds.filter(Boolean) : [];
+      if (ids.length < 2) {
+        res.status(400).json({ error: 'Selecciona al menos 2 participantes.' });
         return;
       }
-      if (swiss.status !== 'finished') {
-        res.status(400).json({ error: 'El Torneo Oficial todavía no está finalizado.' });
-        return;
-      }
-
-      // Récord de cada participante a partir de todas las fechas jugadas.
-      const records = {};
-      (swiss.participant_ids || []).forEach((id) => { records[id] = { wins: 0, losses: 0 }; });
-      (swiss.rounds || []).forEach((round) => {
-        round.matches.forEach((m) => {
-          if (!m.winner) return;
-          const loser = m.winner === m.playerA ? m.playerB : m.playerA;
-          if (records[m.winner]) records[m.winner].wins += 1;
-          if (loser && records[loser]) records[loser].losses += 1;
-        });
-      });
 
       const { data: users, error: usersErr } = await supabase
-        .from('users').select('id, name, color, lives').in('id', swiss.participant_ids || []);
+        .from('users').select('id, name, color').in('id', ids);
       if (usersErr) throw usersErr;
       const userMap = {};
       users.forEach((u) => { userMap[u.id] = u; });
 
-      // Clasificación final: más victorias primero, luego menos derrotas,
-      // y como último desempate, más vidas restantes.
-      const standings = [...(swiss.participant_ids || [])]
-        .filter((id) => userMap[id])
-        .sort((a, b) => {
-          const ra = records[a] || { wins: 0, losses: 0 };
-          const rb = records[b] || { wins: 0, losses: 0 };
-          if (ra.wins !== rb.wins) return rb.wins - ra.wins;
-          if (ra.losses !== rb.losses) return ra.losses - rb.losses;
-          return (userMap[b].lives || 0) - (userMap[a].lives || 0);
-        });
-
-      if (standings.length < 2) {
-        res.status(400).json({ error: 'Hacen falta al menos 2 participantes con récord para armar los playoffs.' });
+      const ordered = ids.filter((id) => userMap[id]);
+      if (ordered.length < 2) {
+        res.status(400).json({ error: 'Hacen falta al menos 2 participantes válidos.' });
         return;
       }
 
-      const { size } = req.body || {};
-      const requested = Number(size) || nextPowerOfTwo(Math.min(standings.length, MAX_SIZE));
-      const bracketSize = Math.max(2, Math.min(MAX_SIZE, nextPowerOfTwo(requested)));
-      const seeded = standings.slice(0, bracketSize);
+      const bracketSize = Math.max(2, Math.min(MAX_SIZE, nextPowerOfTwo(ordered.length)));
 
-      const participants = seeded.map((id) => ({
+      const participants = ordered.map((id) => ({
         id,
         name: userMap[id].name,
         color: userMap[id].color,
       }));
 
-      const rounds = buildRounds(seeded, bracketSize);
-      const playoff = { status: 'active', participants, rounds };
+      const rounds = buildRounds(ordered, bracketSize);
+      const playoff = { title: title || 'Playoffs', status: 'active', participants, rounds };
       await savePlayoff(playoff);
       res.status(201).json({ id: DOC_ID, ...playoff });
     } catch (err) {
@@ -200,6 +170,40 @@ export default async function handler(req, res) {
         propagate(playoff.rounds);
         const lastRound = playoff.rounds[playoff.rounds.length - 1];
         playoff.status = lastRound[0].winner ? 'finished' : 'active';
+        await savePlayoff(playoff);
+        res.status(200).json({ id: DOC_ID, ...playoff });
+        return;
+      }
+
+      if (action === 'swap') {
+        if (playoff.status !== 'active') {
+          res.status(400).json({ error: 'Solo se pueden mover jugadores mientras los playoffs están activos.' });
+          return;
+        }
+        const { matchIdA, slotA, matchIdB, slotB } = req.body;
+        if (!['p1', 'p2'].includes(slotA) || !['p1', 'p2'].includes(slotB)) {
+          res.status(400).json({ error: 'No se pudo identificar a los jugadores a mover.' });
+          return;
+        }
+        const locA = findMatch(playoff.rounds, matchIdA);
+        const locB = findMatch(playoff.rounds, matchIdB);
+        if (!locA || !locB) {
+          res.status(400).json({ error: 'No se pudo identificar a los jugadores a mover.' });
+          return;
+        }
+        const mA = playoff.rounds[locA.ri][locA.mi];
+        const mB = playoff.rounds[locB.ri][locB.mi];
+        const tmp = mA[slotA];
+        mA[slotA] = mB[slotB];
+        mB[slotB] = tmp;
+        if (locA.ri === 0 || locB.ri === 0) {
+          playoff.rounds[0].forEach((m) => {
+            if (m.p1 && !m.p2) m.winner = m.p1;
+            else if (!m.p1 && m.p2) m.winner = m.p2;
+            else if (m.p1 && m.p2 && m.winner && m.winner !== m.p1 && m.winner !== m.p2) m.winner = null;
+          });
+          propagate(playoff.rounds);
+        }
         await savePlayoff(playoff);
         res.status(200).json({ id: DOC_ID, ...playoff });
         return;

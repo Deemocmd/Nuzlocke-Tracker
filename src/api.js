@@ -47,8 +47,9 @@ export const api = {
   resetBracket: () => request('/bracket', { method: 'DELETE', auth: true }),
 
   getPlayoff: () => request('/playoff'),
-  generatePlayoff: (size) => request('/playoff', { method: 'POST', body: { size }, auth: true }),
+  createPlayoff: (title, participantIds) => request('/playoff', { method: 'POST', body: { title, participantIds }, auth: true }),
   playoffSetWinner: (matchId, winnerId) => request('/playoff', { method: 'PUT', body: { action: 'setWinner', matchId, winnerId }, auth: true }),
+  playoffSwap: (matchIdA, slotA, matchIdB, slotB) => request('/playoff', { method: 'PUT', body: { action: 'swap', matchIdA, slotA, matchIdB, slotB }, auth: true }),
   resetPlayoff: () => request('/playoff', { method: 'DELETE', auth: true }),
 };
 
