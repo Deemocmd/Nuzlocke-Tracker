@@ -4,6 +4,30 @@ import { requireAdmin, allowCors } from './_lib/auth.js';
 import { HOENN_LOCATIONS, USER_COLOR_POOL } from '../shared/constants.js';
 import { userToJson, routeToJson } from './_lib/serialize.js';
 
+// Supabase/PostgREST solo devuelve hasta "Max Rows" filas por consulta
+// (1000 por defecto). Con muchos participantes x muchas rutas, una sola
+// consulta puede quedarse corta y "perder" filas en silencio (sin error).
+// Esta función pide los datos en bloques hasta traerlos todos, sin
+// importar cuántas rutas haya en total.
+async function fetchAllRouteEntries() {
+  const PAGE_SIZE = 1000;
+  let from = 0;
+  let all = [];
+  for (;;) {
+    const { data, error } = await supabase
+      .from('route_entries')
+      .select('*')
+      .order('order_index', { ascending: true })
+      .order('id', { ascending: true }) // desempate estable entre páginas
+      .range(from, from + PAGE_SIZE - 1);
+    if (error) throw error;
+    all = all.concat(data || []);
+    if (!data || data.length < PAGE_SIZE) break;
+    from += PAGE_SIZE;
+  }
+  return all;
+}
+
 export default async function handler(req, res) {
   if (allowCors(req, res)) return;
 
@@ -15,11 +39,7 @@ export default async function handler(req, res) {
         .order('created_at', { ascending: true });
       if (usersError) throw usersError;
 
-      const { data: routes, error: routesError } = await supabase
-        .from('route_entries')
-        .select('*')
-        .order('order_index', { ascending: true });
-      if (routesError) throw routesError;
+      const routes = await fetchAllRouteEntries();
 
       const routesByUser = {};
       for (const r of routes) {
